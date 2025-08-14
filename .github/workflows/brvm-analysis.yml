@@ -14,11 +14,11 @@ jobs:
     steps:
     # 1. Récupère le code de votre dépôt
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4 # Mise à jour vers v4
 
     # 2. Installe Python
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # Mise à jour vers v5
       with:
         python-version: '3.10'
 
@@ -39,12 +39,13 @@ jobs:
       env:
         # Passe le secret GitHub en tant que variable d'environnement
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      # Remplacez "votre_script.py" par le nom de votre fichier Python
+      # Assurez-vous que le nom du fichier est correct
       run: python votre_script.py 
 
     # 6. Sauvegarde le rapport Word généré comme un artefact
     - name: Upload Word Report Artifact
-      uses: actions/upload-artifact@v3
+      # CORRECTION : Mise à jour de la version de l'action
+      uses: actions/upload-artifact@v4
       with:
         name: rapport-financier-brvm
         # Cherche tous les fichiers .docx générés
