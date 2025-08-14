@@ -1,15 +1,11 @@
 # ==============================================================================
-# 1. INSTALLATION DES DÉPENDANCES (AVEC LA CORRECTION DE VERSION)
+# 1. INSTALLATION DES DÉPENDANCES
 # ==============================================================================
-print("Installation des bibliothèques et du pilote de navigateur (avec correctif de version)...")
+print("Installation des bibliothèques et du pilote de navigateur...")
 !pip install --upgrade pip -q
-# CORRECTION FINALE : Forcer une version compatible de 'blinker' pour éviter le ModuleNotFoundError
 !pip install blinker==1.6.2 selenium-wire gspread google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests python-docx pandas openpyxl pdfplumber -q
-
-# Installation de ChromeDriver
 !apt-get update > /dev/null
 !apt-get install -y chromium-chromedriver > /dev/null
-
 print("✅ Toutes les dépendances sont prêtes.\n")
 
 # ==============================================================================
@@ -34,20 +30,22 @@ import urllib3
 import json
 from collections import defaultdict
 
-# Imports pour Selenium-wire
+# Imports Selenium
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException
+# NOUVEAU : Imports pour les attentes explicites, plus fiables que time.sleep()
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# MODIFIÉ : Imports pour l'authentification par compte de service et gestion des secrets
+# Imports pour l'authentification
 try:
     from google.colab import userdata
 except ImportError:
-    userdata = None # Ne fonctionnera que sur Colab
-
+    userdata = None
 from google.oauth2 import service_account
 
-# Désactiver les avertissements de sécurité
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==============================================================================
@@ -57,12 +55,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# 4. CLASSE PRINCIPALE DE L'ANALYSEUR (VERSION CORRIGÉE)
+# 4. CLASSE PRINCIPALE DE L'ANALYSEUR
 # ==============================================================================
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # Dictionnaire robuste avec de multiples termes de recherche
+        # ... (Le dictionnaire societes_mapping reste identique) ...
         self.societes_mapping = {
             'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair', 'servair abidjan', 'abjc']},
             'BICB': {'nom_rapport': 'BIIC BN', 'alternatives': ['biic', 'bicb']},
@@ -118,6 +116,7 @@ class BRVMAnalyzer:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
 
+    # ... (les fonctions setup_selenium, authenticate..., verify..., _normalize_text restent identiques)
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -182,68 +181,82 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
 
-    # MODIFIÉ : Logique de scraping rendue plus robuste
+
+    # NOUVEAU : Version entièrement revue avec attentes explicites et débogage
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver:
-            logger.error("Le pilote Selenium n'est pas disponible. Arrêt de la recherche.")
+            logger.error("Le pilote Selenium n'est pas disponible.")
             return {}
 
         url = "https://www.brvm.org/fr/rapports-des-societes-cotees/all"
         companies_reports = defaultdict(list)
-        full_html_content = ""
-
+        
         try:
             logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
-            time.sleep(5) # Attendre que la page initiale se stabilise
 
-            logger.info("Analyse du contenu initial de la page.")
-            initial_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            self._associate_reports_from_soup(initial_soup, companies_reports)
+            # NOUVEAU: Attendre que le conteneur principal des rapports soit présent
+            # C'est plus fiable qu'un simple time.sleep()
+            wait = WebDriverWait(self.driver, 20) # Attendre jusqu'à 20 secondes
+            reports_container_selector = (By.CSS_SELECTOR, "div.view-content")
+            wait.until(EC.presence_of_element_located(reports_container_selector))
+            logger.info("Le conteneur des rapports a été trouvé sur la page.")
 
-            logger.info("Démarrage du scroll pour charger le contenu dynamique...")
+            # Scroll et collecte des données
             last_height = self.driver.execute_script("return document.body.scrollHeight")
-
-            for i in range(20): # Augmentation du nombre de tentatives de scroll
-                del self.driver.requests
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                try:
-                    # Attendre une requête AJAX après le scroll
-                    self.driver.wait_for_request('/views/ajax', timeout=10)
-                    logger.info(f"Chargement de la page de rapports {i+1} via AJAX...")
-
-                    # Traiter les nouvelles données interceptées
-                    for request in self.driver.requests:
-                         if request.response and '/views/ajax' in request.url:
-                            body_json = json.loads(request.response.body.decode('utf-8'))
-                            html_chunk = next((cmd.get('data', '') for cmd in body_json if cmd.get('command') == 'insert'), None)
-                            if html_chunk:
-                                full_html_content += html_chunk
-                except TimeoutException:
-                    logger.info("Fin du scroll (pas de nouvelles requêtes AJAX détectées).")
-                    break # Sortir de la boucle si pas de nouveau contenu chargé
+            for i in range(20):
+                # Analyser le contenu visible avant de scroller
+                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                found_count = self._associate_reports_from_soup(soup, companies_reports)
+                logger.info(f"Itération {i+1}: {found_count} rapports trouvés. Total unique: {sum(len(v) for v in companies_reports.values())}")
                 
-                time.sleep(2) # Petite pause pour laisser le DOM se mettre à jour
+                # Scroll vers le bas
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(3) # Attendre que le nouveau contenu se charge
+
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
                 if new_height == last_height:
-                    logger.info("La hauteur de la page n'augmente plus. Fin du scroll.")
+                    logger.info("Fin du scroll, la hauteur de la page ne change plus.")
                     break
                 last_height = new_height
-
-            if full_html_content:
-                logger.info("Analyse des données AJAX interceptées...")
-                soup = BeautifulSoup(full_html_content, 'html.parser')
-                self._associate_reports_from_soup(soup, companies_reports)
-
+        
+        except TimeoutException:
+            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
+            self._save_debug_info() # NOUVEAU : Sauvegarder les infos de débogage
+            return {}
         except Exception as e:
-            logger.error(f"Erreur critique lors de la recherche avec Selenium-wire: {e}", exc_info=True)
+            logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
+            self._save_debug_info() # NOUVEAU : Sauvegarder les infos de débogage
+            return {}
+
+        if not companies_reports:
+             logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé.")
+             self._save_debug_info()
 
         return companies_reports
 
+    # NOUVEAU : Fonction utilitaire pour le débogage
+    def _save_debug_info(self):
+        try:
+            screenshot_path = 'debug_screenshot.png'
+            html_path = 'debug_page.html'
+            self.driver.save_screenshot(screenshot_path)
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(self.driver.page_source)
+            logger.info(f"Informations de débogage sauvegardées : '{screenshot_path}' et '{html_path}'.")
+            logger.info("Dans GitHub Actions, ces fichiers seront disponibles comme artefacts si l'étape 'upload-artifact' est configurée.")
+        except Exception as e:
+            logger.error(f"Impossible de sauvegarder les informations de débogage : {e}")
+
 
     def _associate_reports_from_soup(self, soup, companies_reports):
-        reports_found_count = 0
-        potential_items = soup.select("div.views-row")
+        reports_found_this_pass = 0
+        # Utiliser un sélecteur plus spécifique si possible
+        potential_items = soup.select("div.view-content div.views-row")
+        
+        # NOUVEAU : Log pour voir si on trouve les éléments de base
+        if not potential_items:
+            logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé.")
 
         for item in potential_items:
             link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
@@ -254,18 +267,20 @@ class BRVMAnalyzer:
                 if any(self._normalize_text(alt) in item_text_normalized for alt in info['alternatives']):
                     href = link_tag.get('href')
                     full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
-                    report_data = {
-                        'titre': link_tag.get_text(strip=True),
-                        'url': full_url,
-                        'date': self._extract_date_from_text(item.get_text())
-                    }
+                    
+                    # Vérifier si l'URL n'a pas déjà été ajoutée
                     if not any(r['url'] == full_url for r in companies_reports[symbol]):
+                        report_data = {
+                            'titre': link_tag.get_text(strip=True),
+                            'url': full_url,
+                            'date': self._extract_date_from_text(item.get_text())
+                        }
                         companies_reports[symbol].append(report_data)
-                        reports_found_count += 1
-                    break # Passer à l'item suivant une fois la société trouvée
-        logger.info(f"{reports_found_count} nouveaux rapports pertinents ont été associés.")
-        return reports_found_count
+                        reports_found_this_pass += 1
+                    break 
+        return reports_found_this_pass
 
+    # ... (les fonctions _extract_date..., _extract_financial_data..., process_all..., create_word... et run_analysis restent identiques)
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -426,10 +441,8 @@ class BRVMAnalyzer:
 # ==============================================================================
 if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-    
     print("="*80)
     print("      🔍 ANALYSEUR FINANCIER BRVM - VERSION FINALE (INTERCEPTION RÉSEAU) 🔍")
     print("="*80)
-
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
     analyzer.run_analysis()
