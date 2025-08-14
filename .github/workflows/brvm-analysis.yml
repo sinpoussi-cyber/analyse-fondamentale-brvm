@@ -31,18 +31,14 @@ jobs:
     - name: Run BRVM Financial Analysis Script
       env:
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      # CORRECTION : Mettez ici le nom EXACT de votre fichier python.
-      # Par exemple, si votre fichier s'appelle 'main.py' :
+      # VÉRIFIEZ QUE 'main.py' EST BIEN LE NOM DE VOTRE FICHIER SCRIPT
       run: python main.py
 
-    # NOUVEAU : Toujours tenter de sauvegarder les artefacts, surtout en cas d'échec
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
-      # La condition 'if: always()' assure que cette étape s'exécute même si la précédente échoue
       if: always()
       with:
         name: execution-artifacts
-        # Sauvegarde le rapport .docx ET les fichiers de débogage s'ils existent
         path: |
           ./*.docx
           ./debug_*.png
