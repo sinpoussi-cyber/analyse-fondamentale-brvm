@@ -1,6 +1,12 @@
 # ==============================================================================
-# 2. IMPORTATION ET CONFIGURATION (LES INSTALLATIONS SONT GÉRÉES PAR L'ENVIRONNEMENT)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL
+# Ce script ne contient que du code Python.
+# Toutes les installations sont gérées par le fichier .github/workflows/brvm-analysis.yml
 # ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. IMPORTATION DES BIBLIOTHÈQUES
+# ------------------------------------------------------------------------------
 import gspread
 import requests
 from bs4 import BeautifulSoup
@@ -28,29 +34,29 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# Imports pour l'authentification
+# Imports pour l'authentification Google
 try:
     from google.colab import userdata
 except ImportError:
     userdata = None
 from google.oauth2 import service_account
 
+# Désactiver les avertissements de sécurité (pour les requêtes HTTPS)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ==============================================================================
-# 3. CONFIGURATION DU LOGGING
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# 2. CONFIGURATION DU LOGGING
+# ------------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# 4. CLASSE PRINCIPALE DE L'ANALYSEUR
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# 3. CLASSE PRINCIPALE DE L'ANALYSEUR
+# ------------------------------------------------------------------------------
 class BRVMAnalyzer:
-    # ... (toutes les fonctions __init__, setup_selenium, authenticate..., etc. restent identiques)
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # Dictionnaire robuste avec de multiples termes de recherche
+        # Dictionnaire des sociétés à suivre. Les clés (ex: 'ABJC') DOIVENT correspondre aux noms des onglets dans le Google Sheet.
         self.societes_mapping = {
             'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair', 'servair abidjan', 'abjc']},
             'BICB': {'nom_rapport': 'BIIC BN', 'alternatives': ['biic', 'bicb']},
@@ -114,7 +120,7 @@ class BRVMAnalyzer:
         chrome_options.add_argument("--window-size=1920,1080")
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
-            logger.info("✅ Pilote Selenium-wire (Chrome) démarré avec succès.")
+            logger.info("✅ Pilote Selenium (Chrome) démarré avec succès.")
         except Exception as e:
             logger.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
             self.driver = None
@@ -143,25 +149,36 @@ class BRVMAnalyzer:
 
     def verify_and_filter_companies(self):
         try:
-            logger.info(f"Vérification des feuilles dans G-Sheet...")
+            logger.info(f"Vérification des feuilles dans G-Sheet (ID: {self.spreadsheet_id})...")
             sheet = self.gc.open_by_key(self.spreadsheet_id)
             existing_sheets = [ws.title for ws in sheet.worksheets()]
+            
+            logger.info(f"Onglets trouvés dans le G-Sheet: {existing_sheets}")
+
             symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
             missing_symbols = [s for s in self.original_societes_mapping if s not in existing_sheets]
+            
             if missing_symbols:
                 print("\n" + "="*50 + "\n⚠️  AVERTISSEMENT : FEUILLES MANQUANTES  ⚠️")
                 for symbol in missing_symbols:
                     print(f"  - {symbol} ({self.original_societes_mapping[symbol]['nom_rapport']})")
                 print("L'analyse continuera uniquement pour les sociétés trouvées.\n" + "="*50 + "\n")
+            
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
-            logger.info(f"Analyse planifiée pour {len(self.societes_mapping)} sociétés.")
+            
+            if not self.societes_mapping:
+                logger.error("❌ ERREUR FATALE : Aucune société à analyser. Vérifiez que les noms des onglets de votre Google Sheet correspondent aux symboles du script (ex: 'BOAC', 'SNTS').")
+                return False
+            
+            logger.info(f"✅ Vérification réussie. {len(self.societes_mapping)} sociétés seront analysées.")
             return True
+            
         except gspread.exceptions.SpreadsheetNotFound:
             logger.error(f"❌ Erreur: Le Spreadsheet avec l'ID '{self.spreadsheet_id}' est introuvable.")
             logger.error("Veuillez vérifier que l'ID est correct et que le compte de service a les droits d'accès 'Lecteur'.")
             return False
         except Exception as e:
-            logger.error(f"❌ Erreur vérification G-Sheet: {e}")
+            logger.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
             return False
 
     def _normalize_text(self, text):
@@ -170,50 +187,34 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    # NOUVELLE LOGIQUE DE SCRAPING
     def _find_all_reports_with_selenium_wire(self):
-        if not self.driver:
-            logger.error("Le pilote Selenium n'est pas disponible.")
-            return {}
-
+        if not self.driver: return {}
         url = "https://www.brvm.org/fr/rapports-des-societes-cotees/all"
         companies_reports = defaultdict(list)
-        
         try:
             logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
 
-            # NOUVEAU: Gérer la bannière de cookies
             try:
-                # Attendre un peu que la bannière apparaisse
                 cookie_wait = WebDriverWait(self.driver, 5)
-                # Trouver le bouton par son ID, son texte ou son sélecteur CSS
                 cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
                 logger.info("Bannière de cookies trouvée. Clic sur 'Accepter'.")
                 cookie_button.click()
-                time.sleep(2) # Laisser le temps à la page de réagir
-            except TimeoutException:
-                logger.info("Aucune bannière de cookies n'a été détectée, ou elle a mis trop de temps à apparaître.")
-            except NoSuchElementException:
-                logger.info("Le bouton d'acceptation des cookies n'a pas été trouvé.")
+                time.sleep(2)
+            except (TimeoutException, NoSuchElementException):
+                logger.info("Aucune bannière de cookies n'a été détectée.")
 
-
-            # Attendre que le conteneur principal des rapports soit présent
-            wait = WebDriverWait(self.driver, 30) # Augmentation du timeout à 30s
-            reports_container_selector = (By.CSS_SELECTOR, "div.view-content")
-            wait.until(EC.presence_of_element_located(reports_container_selector))
+            wait = WebDriverWait(self.driver, 30)
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
             logger.info("Le conteneur des rapports a été trouvé sur la page.")
 
-            # Scroll et collecte des données
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 found_count = self._associate_reports_from_soup(soup, companies_reports)
-                logger.info(f"Itération {i+1}: {found_count} nouveaux rapports trouvés. Total unique: {sum(len(v) for v in companies_reports.values())}")
-                
+                logger.info(f"Itération {i+1}: {found_count} nouveaux rapports. Total unique: {sum(len(v) for v in companies_reports.values())}")
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 time.sleep(3)
-
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
                 if new_height == last_height:
                     logger.info("Fin du scroll, la hauteur de la page ne change plus.")
@@ -221,7 +222,7 @@ class BRVMAnalyzer:
                 last_height = new_height
         
         except TimeoutException:
-            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti, même après la gestion des cookies.")
+            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
             self._save_debug_info()
             return {}
         except Exception as e:
@@ -232,7 +233,6 @@ class BRVMAnalyzer:
         if not companies_reports:
              logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé.")
              self._save_debug_info()
-
         return companies_reports
 
     def _save_debug_info(self):
@@ -242,39 +242,30 @@ class BRVMAnalyzer:
             self.driver.save_screenshot(screenshot_path)
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(self.driver.page_source)
-            logger.info(f"Informations de débogage sauvegardées : '{screenshot_path}' et '{html_path}'.")
+            logger.info(f"Infos de débogage sauvegardées : '{screenshot_path}' et '{html_path}'.")
         except Exception as e:
-            logger.error(f"Impossible de sauvegarder les informations de débogage : {e}")
+            logger.error(f"Impossible de sauvegarder les infos de débogage : {e}")
 
     def _associate_reports_from_soup(self, soup, companies_reports):
         reports_found_this_pass = 0
         potential_items = soup.select("div.view-content div.views-row")
-        
         if not potential_items:
             logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé.")
-
         for item in potential_items:
             link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
             if not link_tag: continue
-
             item_text_normalized = self._normalize_text(item.get_text())
             for symbol, info in self.societes_mapping.items():
                 if any(self._normalize_text(alt) in item_text_normalized for alt in info['alternatives']):
                     href = link_tag.get('href')
                     full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
-                    
                     if not any(r['url'] == full_url for r in companies_reports[symbol]):
-                        report_data = {
-                            'titre': link_tag.get_text(strip=True),
-                            'url': full_url,
-                            'date': self._extract_date_from_text(item.get_text())
-                        }
+                        report_data = {'titre': link_tag.get_text(strip=True), 'url': full_url, 'date': self._extract_date_from_text(item.get_text())}
                         companies_reports[symbol].append(report_data)
                         reports_found_this_pass += 1
                     break 
         return reports_found_this_pass
         
-    # ... (Le reste des fonctions est identique : _extract_date, _extract_financial..., process..., create..., run_analysis...)
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -289,14 +280,13 @@ class BRVMAnalyzer:
         if sem_match:
             semester = int(sem_match.group(1) or sem_match.group(2))
             return datetime(year, 6 if semester == 1 else 12, 1)
-        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower:
-            return datetime(year, 12, 31)
+        if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
     def _extract_financial_data_from_pdf(self, pdf_url):
         data = {'evolution_ca': 'Non trouvé', 'evolution_activites': 'Non trouvé', 'evolution_rn': 'Non trouvé'}
         try:
-            logger.info(f"    -> Téléchargement et analyse du PDF...")
+            logger.info(f"    -> Analyse du PDF...")
             response = self.session.get(pdf_url, timeout=45, verify=False)
             response.raise_for_status()
             with pdfplumber.open(io.BytesIO(response.content)) as pdf:
@@ -310,8 +300,7 @@ class BRVMAnalyzer:
             }
             for key, pattern in patterns.items():
                 match = re.search(pattern, clean_text, re.IGNORECASE)
-                if match:
-                    data[key] = re.sub(r'[^\d\.\-%+]', '', match.group(1))
+                if match: data[key] = re.sub(r'[^\d\.\-%+]', '', match.group(1))
         except Exception as e:
             logger.warning(f"    -> Erreur lors de l'analyse du PDF: {e}")
         return data
@@ -320,13 +309,10 @@ class BRVMAnalyzer:
         all_reports = self._find_all_reports_with_selenium_wire()
         results = {}
         total_reports_found = sum(len(reports) for reports in all_reports.values())
-
         if total_reports_found == 0:
-            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé. Le site est peut-être en maintenance ou sa structure a radicalement changé.")
+            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM.")
             return {}
-
-        logger.info(f"✅ {total_reports_found} rapports uniques trouvés au total pour les sociétés suivies.")
-
+        logger.info(f"✅ {total_reports_found} rapports uniques trouvés au total.")
         for symbol, info in self.societes_mapping.items():
             logger.info(f"\n📊 Traitement de {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
@@ -334,23 +320,15 @@ class BRVMAnalyzer:
                 logger.warning(f"  -> Aucun rapport trouvé pour {symbol}")
                 results[symbol] = {'nom': info['nom_rapport'], 'statut': 'Aucun rapport trouvé', 'rapports_analyses': []}
                 continue
-
             company_reports.sort(key=lambda x: x['date'], reverse=True)
             reports_to_analyze = company_reports[:5]
-            logger.info(f"  -> {len(reports_to_analyze)} rapports récents seront analysés pour {symbol}.")
-
             analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
             for i, report in enumerate(reports_to_analyze):
                 logger.info(f"  -> Analyse {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
                 financial_data = self._extract_financial_data_from_pdf(report['url'])
-                analysis_data['rapports_analyses'].append({
-                    'titre': report['titre'], 'url': report['url'],
-                    'date': report['date'].strftime('%Y-%m') if report['date'].year > 1900 else 'Date inconnue',
-                    'donnees': financial_data
-                })
+                analysis_data['rapports_analyses'].append({'titre': report['titre'], 'url': report['url'], 'date': report['date'].strftime('%Y-%m') if report['date'].year > 1900 else 'Date inconnue', 'donnees': financial_data})
                 time.sleep(1)
             results[symbol] = analysis_data
-
         logger.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
 
@@ -358,13 +336,13 @@ class BRVMAnalyzer:
         logger.info(f"Création du rapport Word : {output_path}")
         try:
             doc = Document()
+            # ... (la création du document Word reste identique) ...
             doc.styles['Normal'].font.name = 'Calibri'
             doc.styles['Normal'].font.size = Pt(11)
             doc.add_heading('Analyse Financière des Sociétés Cotées', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
             doc.add_heading('Bourse Régionale des Valeurs Mobilières (BRVM)', 1).alignment = WD_ALIGN_PARAGRAPH.CENTER
             p = doc.add_paragraph(f'\nRapport généré le : {datetime.now().strftime("%d %B %Y à %H:%M")}\n', style='Caption')
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
             total_companies = len(results)
             companies_with_reports = len([r for r in results.values() if r.get('rapports_analyses')])
             total_reports = sum(len(r.get('rapports_analyses', [])) for r in results.values())
@@ -373,7 +351,6 @@ class BRVMAnalyzer:
             stats_run = stats_p.add_run(f'Synthèse : {companies_with_reports}/{total_companies} sociétés avec rapports trouvés • {total_reports} rapports récents analysés')
             stats_run.bold = True
             doc.add_page_break()
-
             for symbol, data in results.items():
                 doc.add_heading(f"{symbol} - {data['nom']}", level=2)
                 if not data.get('rapports_analyses'):
@@ -393,27 +370,18 @@ class BRVMAnalyzer:
                     row_cells[3].text = donnees.get('evolution_activites', 'N/A')
                     row_cells[4].text = donnees.get('evolution_rn', 'N/A')
                 doc.add_paragraph()
-
             doc.save(output_path)
-            logger.info(f"✅ Rapport Word '{os.path.basename(output_path)}' généré avec succès.")
-            print("\n" + "="*80)
-            print("🎉 RAPPORT FINALISÉ 🎉")
-            print(f"📊 Sociétés traitées: {companies_with_reports}/{total_companies}")
-            print(f"📄 Rapports analysés: {total_reports}")
-            print(f"📁 Fichier sauvegardé dans le répertoire courant : {output_path}")
-            print("="*80 + "\n")
+            print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
         except Exception as e:
             logger.error(f"❌ Impossible d'enregistrer le rapport Word : {e}")
 
-    def run_analysis(self):
+    def run(self):
         try:
             logger.info("🚀 Démarrage de l'analyse BRVM...")
             self.setup_selenium()
             if not self.driver or not self.authenticate_google_services(): return
-            if not self.verify_and_filter_companies(): return
-
+            if not self.verify_and_filter_companies(): return # Arrêt si aucune société n'est trouvée
             analysis_results = self.process_all_companies()
-
             if analysis_results and any(res.get('rapports_analyses') for res in analysis_results.values()):
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
                 output_filename = f"Analyse_Financiere_BRVM_{timestamp}.docx"
@@ -421,22 +389,19 @@ class BRVMAnalyzer:
             else:
                 logger.warning("❌ Aucun résultat d'analyse à inclure dans le rapport.")
                 print("\n" + "="*60 + "\n⚠️  AUCUN RAPPORT GÉNÉRÉ\n" + "="*60)
-
         except Exception as e:
             logger.critical(f"❌ Une erreur critique a interrompu l'analyse: {e}", exc_info=True)
         finally:
             if self.driver:
                 self.driver.quit()
-                logger.info("Navigateur Selenium-wire fermé.")
+                logger.info("Navigateur Selenium fermé.")
             logger.info("🏁 Fin du processus d'analyse.")
 
-# ==============================================================================
-# 5. EXÉCUTION PRINCIPALE
-# ==============================================================================
+# ------------------------------------------------------------------------------
+# 4. POINT D'ENTRÉE DU SCRIPT
+# ------------------------------------------------------------------------------
 if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
-    print("="*80)
-    print("      🔍 ANALYSEUR FINANCIER BRVM 🔍")
-    print("="*80)
+    print("="*50 + "\n      🔍 ANALYSEUR FINANCIER BRVM 🔍\n" + "="*50)
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
-    analyzer.run_analysis()
+    analyzer.run()
