@@ -133,6 +133,7 @@ class BRVMAnalyzer:
                 creds_json_str = userdata.get('GSPREAD_SERVICE_ACCOUNT')
             else:
                 creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
+
             if not creds_json_str:
                 logger.error("❌ Le secret 'GSPREAD_SERVICE_ACCOUNT' est introuvable ou vide.")
                 return False
@@ -151,20 +152,27 @@ class BRVMAnalyzer:
             logger.info(f"Vérification des feuilles dans G-Sheet (ID: {self.spreadsheet_id})...")
             sheet = self.gc.open_by_key(self.spreadsheet_id)
             existing_sheets = [ws.title for ws in sheet.worksheets()]
+            
             logger.info(f"Onglets trouvés dans le G-Sheet: {existing_sheets}")
+
             symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
             missing_symbols = [s for s in self.original_societes_mapping if s not in existing_sheets]
+            
             if missing_symbols:
                 print("\n" + "="*50 + "\n⚠️  AVERTISSEMENT : FEUILLES MANQUANTES  ⚠️")
                 for symbol in missing_symbols:
                     print(f"  - {symbol} ({self.original_societes_mapping[symbol]['nom_rapport']})")
                 print("L'analyse continuera uniquement pour les sociétés trouvées.\n" + "="*50 + "\n")
+            
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
+            
             if not self.societes_mapping:
                 logger.error("❌ ERREUR FATALE : Aucune société à analyser. Vérifiez que les noms des onglets de votre Google Sheet correspondent aux symboles du script (ex: 'BOAC', 'SNTS').")
                 return False
+            
             logger.info(f"✅ Vérification réussie. {len(self.societes_mapping)} sociétés seront analysées.")
             return True
+            
         except gspread.exceptions.SpreadsheetNotFound:
             logger.error(f"❌ Erreur: Le Spreadsheet avec l'ID '{self.spreadsheet_id}' est introuvable.")
             logger.error("Veuillez vérifier que l'ID est correct et que le compte de service a les droits d'accès 'Lecteur'.")
@@ -186,6 +194,7 @@ class BRVMAnalyzer:
         try:
             logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
+
             try:
                 cookie_wait = WebDriverWait(self.driver, 5)
                 cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
@@ -194,9 +203,11 @@ class BRVMAnalyzer:
                 time.sleep(2)
             except (TimeoutException, NoSuchElementException):
                 logger.info("Aucune bannière de cookies n'a été détectée.")
+
             wait = WebDriverWait(self.driver, 30)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
             logger.info("Le conteneur des rapports a été trouvé sur la page.")
+
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
@@ -209,6 +220,7 @@ class BRVMAnalyzer:
                     logger.info("Fin du scroll, la hauteur de la page ne change plus.")
                     break
                 last_height = new_height
+        
         except TimeoutException:
             logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
             self._save_debug_info()
@@ -217,6 +229,7 @@ class BRVMAnalyzer:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
             self._save_debug_info()
             return {}
+
         if not companies_reports:
              logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé.")
              self._save_debug_info()
