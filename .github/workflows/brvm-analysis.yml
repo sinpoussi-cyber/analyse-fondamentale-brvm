@@ -1,10 +1,8 @@
 name: Analyse Financière BRVM Quotidienne
 
-# Déclenche le workflow tous les jours à 7h UTC
 on:
   schedule:
     - cron: '0 7 * * *'
-  # Permet aussi de le lancer manuellement depuis l'onglet Actions
   workflow_dispatch:
 
 jobs:
@@ -12,41 +10,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Récupère le code de votre dépôt
     - name: Checkout repository
-      uses: actions/checkout@v4 # Mise à jour vers v4
+      uses: actions/checkout@v4
 
-    # 2. Installe Python
     - name: Set up Python
-      uses: actions/setup-python@v5 # Mise à jour vers v5
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # 3. Installe les dépendances système (ChromeDriver)
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y chromium-chromedriver
 
-    # 4. Installe les bibliothèques Python
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
         pip install blinker==1.6.2 selenium-wire gspread google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests python-docx pandas openpyxl pdfplumber
 
-    # 5. Exécute le script d'analyse
     - name: Run BRVM Financial Analysis Script
       env:
-        # Passe le secret GitHub en tant que variable d'environnement
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      # Assurez-vous que le nom du fichier est correct
-      run: python votre_script.py 
+      # CORRECTION : Mettez ici le nom EXACT de votre fichier python.
+      # Par exemple, si votre fichier s'appelle 'main.py' :
+      run: python main.py
 
-    # 6. Sauvegarde le rapport Word généré comme un artefact
-    - name: Upload Word Report Artifact
-      # CORRECTION : Mise à jour de la version de l'action
+    # NOUVEAU : Toujours tenter de sauvegarder les artefacts, surtout en cas d'échec
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
+      # La condition 'if: always()' assure que cette étape s'exécute même si la précédente échoue
+      if: always()
       with:
-        name: rapport-financier-brvm
-        # Cherche tous les fichiers .docx générés
-        path: ./*.docx
+        name: execution-artifacts
+        # Sauvegarde le rapport .docx ET les fichiers de débogage s'ils existent
+        path: |
+          ./*.docx
+          ./debug_*.png
+          ./debug_*.html
