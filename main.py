@@ -1,15 +1,5 @@
 # ==============================================================================
-# 1. INSTALLATION DES DÉPENDANCES
-# ==============================================================================
-print("Installation des bibliothèques et du pilote de navigateur...")
-!pip install --upgrade pip -q
-!pip install blinker==1.6.2 selenium-wire gspread google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests python-docx pandas openpyxl pdfplumber -q
-!apt-get update > /dev/null
-!apt-get install -y chromium-chromedriver > /dev/null
-print("✅ Toutes les dépendances sont prêtes.\n")
-
-# ==============================================================================
-# 2. IMPORTATION ET CONFIGURATION
+# 2. IMPORTATION ET CONFIGURATION (LES INSTALLATIONS SONT GÉRÉES PAR L'ENVIRONNEMENT)
 # ==============================================================================
 import gspread
 import requests
@@ -33,8 +23,7 @@ from collections import defaultdict
 # Imports Selenium
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException
-# NOUVEAU : Imports pour les attentes explicites, plus fiables que time.sleep()
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -58,9 +47,10 @@ logger = logging.getLogger(__name__)
 # 4. CLASSE PRINCIPALE DE L'ANALYSEUR
 # ==============================================================================
 class BRVMAnalyzer:
+    # ... (toutes les fonctions __init__, setup_selenium, authenticate..., etc. restent identiques)
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # ... (Le dictionnaire societes_mapping reste identique) ...
+        # Dictionnaire robuste avec de multiples termes de recherche
         self.societes_mapping = {
             'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair', 'servair abidjan', 'abjc']},
             'BICB': {'nom_rapport': 'BIIC BN', 'alternatives': ['biic', 'bicb']},
@@ -116,7 +106,6 @@ class BRVMAnalyzer:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
 
-    # ... (les fonctions setup_selenium, authenticate..., verify..., _normalize_text restent identiques)
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -180,9 +169,8 @@ class BRVMAnalyzer:
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
-
-
-    # NOUVEAU : Version entièrement revue avec attentes explicites et débogage
+    
+    # NOUVELLE LOGIQUE DE SCRAPING
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver:
             logger.error("Le pilote Selenium n'est pas disponible.")
@@ -195,9 +183,23 @@ class BRVMAnalyzer:
             logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
 
-            # NOUVEAU: Attendre que le conteneur principal des rapports soit présent
-            # C'est plus fiable qu'un simple time.sleep()
-            wait = WebDriverWait(self.driver, 20) # Attendre jusqu'à 20 secondes
+            # NOUVEAU: Gérer la bannière de cookies
+            try:
+                # Attendre un peu que la bannière apparaisse
+                cookie_wait = WebDriverWait(self.driver, 5)
+                # Trouver le bouton par son ID, son texte ou son sélecteur CSS
+                cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
+                logger.info("Bannière de cookies trouvée. Clic sur 'Accepter'.")
+                cookie_button.click()
+                time.sleep(2) # Laisser le temps à la page de réagir
+            except TimeoutException:
+                logger.info("Aucune bannière de cookies n'a été détectée, ou elle a mis trop de temps à apparaître.")
+            except NoSuchElementException:
+                logger.info("Le bouton d'acceptation des cookies n'a pas été trouvé.")
+
+
+            # Attendre que le conteneur principal des rapports soit présent
+            wait = WebDriverWait(self.driver, 30) # Augmentation du timeout à 30s
             reports_container_selector = (By.CSS_SELECTOR, "div.view-content")
             wait.until(EC.presence_of_element_located(reports_container_selector))
             logger.info("Le conteneur des rapports a été trouvé sur la page.")
@@ -205,14 +207,12 @@ class BRVMAnalyzer:
             # Scroll et collecte des données
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
-                # Analyser le contenu visible avant de scroller
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 found_count = self._associate_reports_from_soup(soup, companies_reports)
-                logger.info(f"Itération {i+1}: {found_count} rapports trouvés. Total unique: {sum(len(v) for v in companies_reports.values())}")
+                logger.info(f"Itération {i+1}: {found_count} nouveaux rapports trouvés. Total unique: {sum(len(v) for v in companies_reports.values())}")
                 
-                # Scroll vers le bas
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(3) # Attendre que le nouveau contenu se charge
+                time.sleep(3)
 
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
                 if new_height == last_height:
@@ -221,12 +221,12 @@ class BRVMAnalyzer:
                 last_height = new_height
         
         except TimeoutException:
-            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
-            self._save_debug_info() # NOUVEAU : Sauvegarder les infos de débogage
+            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti, même après la gestion des cookies.")
+            self._save_debug_info()
             return {}
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
-            self._save_debug_info() # NOUVEAU : Sauvegarder les infos de débogage
+            self._save_debug_info()
             return {}
 
         if not companies_reports:
@@ -235,7 +235,6 @@ class BRVMAnalyzer:
 
         return companies_reports
 
-    # NOUVEAU : Fonction utilitaire pour le débogage
     def _save_debug_info(self):
         try:
             screenshot_path = 'debug_screenshot.png'
@@ -244,17 +243,13 @@ class BRVMAnalyzer:
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(self.driver.page_source)
             logger.info(f"Informations de débogage sauvegardées : '{screenshot_path}' et '{html_path}'.")
-            logger.info("Dans GitHub Actions, ces fichiers seront disponibles comme artefacts si l'étape 'upload-artifact' est configurée.")
         except Exception as e:
             logger.error(f"Impossible de sauvegarder les informations de débogage : {e}")
 
-
     def _associate_reports_from_soup(self, soup, companies_reports):
         reports_found_this_pass = 0
-        # Utiliser un sélecteur plus spécifique si possible
         potential_items = soup.select("div.view-content div.views-row")
         
-        # NOUVEAU : Log pour voir si on trouve les éléments de base
         if not potential_items:
             logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé.")
 
@@ -268,7 +263,6 @@ class BRVMAnalyzer:
                     href = link_tag.get('href')
                     full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
                     
-                    # Vérifier si l'URL n'a pas déjà été ajoutée
                     if not any(r['url'] == full_url for r in companies_reports[symbol]):
                         report_data = {
                             'titre': link_tag.get_text(strip=True),
@@ -279,8 +273,8 @@ class BRVMAnalyzer:
                         reports_found_this_pass += 1
                     break 
         return reports_found_this_pass
-
-    # ... (les fonctions _extract_date..., _extract_financial_data..., process_all..., create_word... et run_analysis restent identiques)
+        
+    # ... (Le reste des fonctions est identique : _extract_date, _extract_financial..., process..., create..., run_analysis...)
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -413,7 +407,7 @@ class BRVMAnalyzer:
 
     def run_analysis(self):
         try:
-            logger.info("🚀 Démarrage de l'analyse BRVM (méthode d'interception réseau)...")
+            logger.info("🚀 Démarrage de l'analyse BRVM...")
             self.setup_selenium()
             if not self.driver or not self.authenticate_google_services(): return
             if not self.verify_and_filter_companies(): return
@@ -442,7 +436,7 @@ class BRVMAnalyzer:
 if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
     print("="*80)
-    print("      🔍 ANALYSEUR FINANCIER BRVM - VERSION FINALE (INTERCEPTION RÉSEAU) 🔍")
+    print("      🔍 ANALYSEUR FINANCIER BRVM 🔍")
     print("="*80)
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
     analyzer.run_analysis()
