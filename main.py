@@ -24,6 +24,7 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import os
+import sys
 from datetime import datetime
 import logging
 import io
@@ -36,9 +37,14 @@ from collections import defaultdict
 # Imports pour Selenium-wire
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException
 
 # MODIFIÉ : Imports pour l'authentification par compte de service et gestion des secrets
-from google.colab import userdata # Spécifique à Colab pour les secrets
+try:
+    from google.colab import userdata
+except ImportError:
+    userdata = None # Ne fonctionnera que sur Colab
+
 from google.oauth2 import service_account
 
 # Désactiver les avertissements de sécurité
@@ -51,7 +57,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ==============================================================================
-# 4. CLASSE PRINCIPALE DE L'ANALYSEUR (VERSION SELENIUM-WIRE)
+# 4. CLASSE PRINCIPALE DE L'ANALYSEUR (VERSION CORRIGÉE)
 # ==============================================================================
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
@@ -117,7 +123,7 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
-
+        chrome_options.add_argument("--window-size=1920,1080")
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("✅ Pilote Selenium-wire (Chrome) démarré avec succès.")
@@ -125,28 +131,22 @@ class BRVMAnalyzer:
             logger.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
             self.driver = None
 
-    # MODIFIÉ : Authentification via un compte de service (plus robuste et portable)
     def authenticate_google_services(self):
         logger.info("Authentification Google via le compte de service...")
         try:
-            # Pour Colab : Récupère le contenu JSON du secret "GSPREAD_SERVICE_ACCOUNT"
-            # Pour GitHub Actions : Récupère le contenu depuis la variable d'environnement
-            creds_json_str = userdata.get('GSPREAD_SERVICE_ACCOUNT') if 'google.colab' in sys.modules else os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-            
+            creds_json_str = None
+            if userdata:
+                creds_json_str = userdata.get('GSPREAD_SERVICE_ACCOUNT')
+            else:
+                creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
+
             if not creds_json_str:
                 logger.error("❌ Le secret 'GSPREAD_SERVICE_ACCOUNT' est introuvable ou vide.")
                 return False
-
             creds_dict = json.loads(creds_json_str)
-            
-            scopes = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            
+            scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
             self.gc = gspread.authorize(creds)
-            
             logger.info("✅ Authentification Google par compte de service réussie.")
             return True
         except Exception as e:
@@ -168,6 +168,10 @@ class BRVMAnalyzer:
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
             logger.info(f"Analyse planifiée pour {len(self.societes_mapping)} sociétés.")
             return True
+        except gspread.exceptions.SpreadsheetNotFound:
+            logger.error(f"❌ Erreur: Le Spreadsheet avec l'ID '{self.spreadsheet_id}' est introuvable.")
+            logger.error("Veuillez vérifier que l'ID est correct et que le compte de service a les droits d'accès 'Lecteur'.")
+            return False
         except Exception as e:
             logger.error(f"❌ Erreur vérification G-Sheet: {e}")
             return False
@@ -178,6 +182,7 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
 
+    # MODIFIÉ : Logique de scraping rendue plus robuste
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver:
             logger.error("Le pilote Selenium n'est pas disponible. Arrêt de la recherche.")
@@ -185,37 +190,48 @@ class BRVMAnalyzer:
 
         url = "https://www.brvm.org/fr/rapports-des-societes-cotees/all"
         companies_reports = defaultdict(list)
+        full_html_content = ""
 
         try:
-            logger.info(f"Navigation vers {url} et interception du trafic réseau...")
+            logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
-            self.driver.wait_for_request('/views/ajax', timeout=30)
-            logger.info("Requêtes AJAX initiales interceptées.")
+            time.sleep(5) # Attendre que la page initiale se stabilise
 
+            logger.info("Analyse du contenu initial de la page.")
+            initial_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+            self._associate_reports_from_soup(initial_soup, companies_reports)
+
+            logger.info("Démarrage du scroll pour charger le contenu dynamique...")
             last_height = self.driver.execute_script("return document.body.scrollHeight")
-            for i in range(15):
+
+            for i in range(20): # Augmentation du nombre de tentatives de scroll
                 del self.driver.requests
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                 try:
-                    self.driver.wait_for_request('/views/ajax', timeout=5)
-                    logger.info(f"Chargement de la page de rapports {i+1}...")
-                except:
-                    logger.info("Fin du scroll (pas de nouvelles requêtes AJAX).")
-                    break
+                    # Attendre une requête AJAX après le scroll
+                    self.driver.wait_for_request('/views/ajax', timeout=10)
+                    logger.info(f"Chargement de la page de rapports {i+1} via AJAX...")
+
+                    # Traiter les nouvelles données interceptées
+                    for request in self.driver.requests:
+                         if request.response and '/views/ajax' in request.url:
+                            body_json = json.loads(request.response.body.decode('utf-8'))
+                            html_chunk = next((cmd.get('data', '') for cmd in body_json if cmd.get('command') == 'insert'), None)
+                            if html_chunk:
+                                full_html_content += html_chunk
+                except TimeoutException:
+                    logger.info("Fin du scroll (pas de nouvelles requêtes AJAX détectées).")
+                    break # Sortir de la boucle si pas de nouveau contenu chargé
+                
+                time.sleep(2) # Petite pause pour laisser le DOM se mettre à jour
                 new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height: break
+                if new_height == last_height:
+                    logger.info("La hauteur de la page n'augmente plus. Fin du scroll.")
+                    break
                 last_height = new_height
 
-            logger.info("Analyse des données interceptées...")
-            full_html_content = ""
-            for request in self.driver.requests:
-                if request.response and '/views/ajax' in request.url:
-                    body_json = json.loads(request.response.body.decode('utf-8'))
-                    html_content = next((cmd.get('data', '') for cmd in body_json if cmd.get('command') == 'insert'), None)
-                    if html_content:
-                        full_html_content += html_content
-
             if full_html_content:
+                logger.info("Analyse des données AJAX interceptées...")
                 soup = BeautifulSoup(full_html_content, 'html.parser')
                 self._associate_reports_from_soup(soup, companies_reports)
 
@@ -223,6 +239,7 @@ class BRVMAnalyzer:
             logger.error(f"Erreur critique lors de la recherche avec Selenium-wire: {e}", exc_info=True)
 
         return companies_reports
+
 
     def _associate_reports_from_soup(self, soup, companies_reports):
         reports_found_count = 0
@@ -245,8 +262,8 @@ class BRVMAnalyzer:
                     if not any(r['url'] == full_url for r in companies_reports[symbol]):
                         companies_reports[symbol].append(report_data)
                         reports_found_count += 1
-                    break
-        logger.info(f"{reports_found_count} rapports pertinents ont été associés à partir de ce bloc de données.")
+                    break # Passer à l'item suivant une fois la société trouvée
+        logger.info(f"{reports_found_count} nouveaux rapports pertinents ont été associés.")
         return reports_found_count
 
     def _extract_date_from_text(self, text):
@@ -296,10 +313,10 @@ class BRVMAnalyzer:
         total_reports_found = sum(len(reports) for reports in all_reports.values())
 
         if total_reports_found == 0:
-            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé même avec la méthode d'interception. Le site est peut-être en maintenance ou sa structure a radicalement changé.")
+            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé. Le site est peut-être en maintenance ou sa structure a radicalement changé.")
             return {}
 
-        logger.info(f"✅ {total_reports_found} rapports trouvés au total.")
+        logger.info(f"✅ {total_reports_found} rapports uniques trouvés au total pour les sociétés suivies.")
 
         for symbol, info in self.societes_mapping.items():
             logger.info(f"\n📊 Traitement de {symbol} - {info['nom_rapport']}")
@@ -383,14 +400,13 @@ class BRVMAnalyzer:
         try:
             logger.info("🚀 Démarrage de l'analyse BRVM (méthode d'interception réseau)...")
             self.setup_selenium()
-            if not self.authenticate_google_services(): return
+            if not self.driver or not self.authenticate_google_services(): return
             if not self.verify_and_filter_companies(): return
 
             analysis_results = self.process_all_companies()
 
             if analysis_results and any(res.get('rapports_analyses') for res in analysis_results.values()):
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
-                # MODIFIÉ : Chemin de sauvegarde local et portable
                 output_filename = f"Analyse_Financiere_BRVM_{timestamp}.docx"
                 self.create_word_report(analysis_results, output_filename)
             else:
@@ -408,16 +424,9 @@ class BRVMAnalyzer:
 # ==============================================================================
 # 5. EXÉCUTION PRINCIPALE
 # ==============================================================================
-# La condition `if __name__ == "__main__"` permet d'exécuter ce bloc 
-# uniquement lorsque le script est lancé directement.
 if __name__ == "__main__":
-    # MODIFIÉ : Utilisation du nouvel ID de votre Spreadsheet
-    # Extrait de l'URL : https://docs.google.com/spreadsheets/d/1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM/edit
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
     
-    # MODIFIÉ : Importation de sys ici pour la logique d'authentification
-    import sys
-
     print("="*80)
     print("      🔍 ANALYSEUR FINANCIER BRVM - VERSION FINALE (INTERCEPTION RÉSEAU) 🔍")
     print("="*80)
