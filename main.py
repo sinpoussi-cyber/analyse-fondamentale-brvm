@@ -6,7 +6,7 @@ print("Installation des bibliothèques et du pilote de navigateur (avec correcti
 # CORRECTION FINALE : Forcer une version compatible de 'blinker' pour éviter le ModuleNotFoundError
 !pip install blinker==1.6.2 selenium-wire gspread google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests python-docx pandas openpyxl pdfplumber -q
 
-# Installation de ChromeDriver pour Colab
+# Installation de ChromeDriver
 !apt-get update > /dev/null
 !apt-get install -y chromium-chromedriver > /dev/null
 
@@ -16,8 +16,6 @@ print("✅ Toutes les dépendances sont prêtes.\n")
 # 2. IMPORTATION ET CONFIGURATION
 # ==============================================================================
 import gspread
-from google.auth import default
-from google.colab import auth, drive
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -38,6 +36,10 @@ from collections import defaultdict
 # Imports pour Selenium-wire
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
+
+# MODIFIÉ : Imports pour l'authentification par compte de service et gestion des secrets
+from google.colab import userdata # Spécifique à Colab pour les secrets
+from google.oauth2 import service_account
 
 # Désactiver les avertissements de sécurité
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -123,17 +125,32 @@ class BRVMAnalyzer:
             logger.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
             self.driver = None
 
+    # MODIFIÉ : Authentification via un compte de service (plus robuste et portable)
     def authenticate_google_services(self):
+        logger.info("Authentification Google via le compte de service...")
         try:
-            logger.info("Authentification Google...")
-            auth.authenticate_user()
-            creds, _ = default()
+            # Pour Colab : Récupère le contenu JSON du secret "GSPREAD_SERVICE_ACCOUNT"
+            # Pour GitHub Actions : Récupère le contenu depuis la variable d'environnement
+            creds_json_str = userdata.get('GSPREAD_SERVICE_ACCOUNT') if 'google.colab' in sys.modules else os.environ.get('GSPREAD_SERVICE_ACCOUNT')
+            
+            if not creds_json_str:
+                logger.error("❌ Le secret 'GSPREAD_SERVICE_ACCOUNT' est introuvable ou vide.")
+                return False
+
+            creds_dict = json.loads(creds_json_str)
+            
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+            
+            creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
             self.gc = gspread.authorize(creds)
-            drive.mount('/content/drive', force_remount=True)
-            logger.info("✅ Authentification Google et montage Drive réussis.")
+            
+            logger.info("✅ Authentification Google par compte de service réussie.")
             return True
         except Exception as e:
-            logger.error(f"❌ Erreur authentification Google: {e}")
+            logger.error(f"❌ Erreur lors de l'authentification par compte de service : {e}")
             return False
 
     def verify_and_filter_companies(self):
@@ -357,7 +374,7 @@ class BRVMAnalyzer:
             print("🎉 RAPPORT FINALISÉ 🎉")
             print(f"📊 Sociétés traitées: {companies_with_reports}/{total_companies}")
             print(f"📄 Rapports analysés: {total_reports}")
-            print(f"📁 Fichier sauvegardé sur votre Google Drive: {output_path}")
+            print(f"📁 Fichier sauvegardé dans le répertoire courant : {output_path}")
             print("="*80 + "\n")
         except Exception as e:
             logger.error(f"❌ Impossible d'enregistrer le rapport Word : {e}")
@@ -373,9 +390,9 @@ class BRVMAnalyzer:
 
             if analysis_results and any(res.get('rapports_analyses') for res in analysis_results.values()):
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+                # MODIFIÉ : Chemin de sauvegarde local et portable
                 output_filename = f"Analyse_Financiere_BRVM_{timestamp}.docx"
-                output_path = f"/content/drive/MyDrive/{output_filename}"
-                self.create_word_report(analysis_results, output_path)
+                self.create_word_report(analysis_results, output_filename)
             else:
                 logger.warning("❌ Aucun résultat d'analyse à inclure dans le rapport.")
                 print("\n" + "="*60 + "\n⚠️  AUCUN RAPPORT GÉNÉRÉ\n" + "="*60)
@@ -391,8 +408,15 @@ class BRVMAnalyzer:
 # ==============================================================================
 # 5. EXÉCUTION PRINCIPALE
 # ==============================================================================
+# La condition `if __name__ == "__main__"` permet d'exécuter ce bloc 
+# uniquement lorsque le script est lancé directement.
 if __name__ == "__main__":
-    SPREADSHEET_ID = '1oNdNiQZI9CPJf810-BbH8h1g2lweGAQ1TN6zy98MSOM'
+    # MODIFIÉ : Utilisation du nouvel ID de votre Spreadsheet
+    # Extrait de l'URL : https://docs.google.com/spreadsheets/d/1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM/edit
+    SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
+    
+    # MODIFIÉ : Importation de sys ici pour la logique d'authentification
+    import sys
 
     print("="*80)
     print("      🔍 ANALYSEUR FINANCIER BRVM - VERSION FINALE (INTERCEPTION RÉSEAU) 🔍")
