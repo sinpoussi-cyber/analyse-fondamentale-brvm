@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.1 (PAGINATION ET MEILLEURE CORRESPONDANCE)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.2 (PAGINATION, FILTRE DATE, ANALYSE COMPLÈTE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -54,7 +54,7 @@ class BRVMAnalyzer:
         self.spreadsheet_id = spreadsheet_id
         self.api_key = api_key
         
-        # ===== DÉBUT DES AJUSTEMENTS CLÉS (MISES À JOUR DES NOMS) =====
+        # ===== MISE À JOUR COMPLÈTE DES NOMS DE SOCIÉTÉS =====
         self.societes_mapping = {
             'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
             'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
@@ -72,7 +72,7 @@ class BRVMAnalyzer:
             'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire", "ecobank ci"]},
             'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans', 'ecobank tg']},
             'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
-            'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
+            'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei-ceda ci']},
             'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci', 'nsbc']},
             'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel bf']},
             'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci', "cote d'ivoire telecom"]},
@@ -86,12 +86,11 @@ class BRVMAnalyzer:
             'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel', 'sonatel']},
             'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire ci', 'sucrivoire']},
             'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal', 'total senegal sa']},
+            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal', 'total senegal s.a.']},
             'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci']},
             'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax ci']},
             'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy ci']},
         }
-        # ===== FIN DES AJUSTEMENTS =====
 
         self.gc = None
         self.driver = None
@@ -163,29 +162,42 @@ class BRVMAnalyzer:
 
     def _normalize_text(self, text):
         if not text: return ""
+        text = text.replace('-', ' ') # Remplace les tirets par des espaces
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
-        text = re.sub(r'[^a-z0-9\s\.]', ' ', text) # Ajout du point pour "S.A."
+        text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
+    # ===== FONCTION MISE À JOUR POUR GÉRER LA PAGINATION DE MANIÈRE ROBUSTE =====
     def _find_all_reports(self):
         if not self.driver: return {}
         
-        # ===== DÉBUT DE LA MODIFICATION (PAGINATION) =====
-        current_page_url = "https://www.brvm.org/fr/rapports-societes-cotees"
+        base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
         company_links = []
         
         try:
-            while current_page_url:
-                logger.info(f"Navigation vers la page de liste : {current_page_url}")
-                self.driver.get(current_page_url)
-                wait = WebDriverWait(self.driver, 20)
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+            # Boucle sur les pages (0, 1, 2, ...). 5 est une limite de sécurité.
+            for page_num in range(5): 
+                page_url = f"{base_url}?page={page_num}"
+                logger.info(f"Navigation vers la page de liste : {page_url}")
+                self.driver.get(page_url)
                 
+                try:
+                    # Attendre que le tableau soit présent
+                    wait = WebDriverWait(self.driver, 15)
+                    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                except TimeoutException:
+                    logger.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
+                    break # Sortir de la boucle si la page est vide ou ne charge pas
+
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                
-                # --- Collecte des liens sur la page actuelle ---
                 table_rows = soup.select("table.views-table tbody tr")
+
+                # Si le tableau est vide, c'est la fin
+                if not table_rows:
+                    logger.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
+                    break
+
                 for row in table_rows:
                     link_tag = row.find('a', href=True)
                     if link_tag:
@@ -196,26 +208,17 @@ class BRVMAnalyzer:
                         if symbol and symbol in self.societes_mapping:
                             if not any(c['url'] == company_url for c in company_links):
                                 company_links.append({'symbol': symbol, 'url': company_url})
-                
-                # --- Recherche de la page suivante ---
-                next_page_link = soup.select_one("li.pager__item--next a")
-                if next_page_link and next_page_link.has_attr('href'):
-                    current_page_url = f"https://www.brvm.org{next_page_link['href']}"
-                    time.sleep(1) # Petite pause
-                else:
-                    logger.info("Dernière page de la liste des sociétés atteinte.")
-                    current_page_url = None # Fin de la boucle
-            # ===== FIN DE LA MODIFICATION (PAGINATION) =====
+                time.sleep(1)
 
             logger.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
 
             for company in company_links:
                 symbol = company['symbol']
-                logger.info(f"--- Collecte pour {symbol} ---")
+                logger.info(f"--- Collecte des rapports pour {symbol} ---")
                 
                 try:
                     self.driver.get(company['url'])
-                    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                     
                     page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                     report_items = page_soup.select("table.views-table tbody tr")
@@ -328,6 +331,7 @@ class BRVMAnalyzer:
                 os.remove(temp_pdf_path)
                 logger.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
 
+    # ===== FONCTION MISE À JOUR POUR FILTRER PAR DATE ET ANALYSER TOUS LES RAPPORTS RÉCENTS =====
     def process_all_companies(self):
         all_reports = self._find_all_reports()
         results = {}
@@ -335,43 +339,69 @@ class BRVMAnalyzer:
         if total_reports_found == 0:
             logger.error("❌ ÉCHEC FINAL : Aucun rapport n'a pu être collecté sur le site de la BRVM.")
             return {}
-        logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés.")
+        logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
         
+        # Définir la date limite pour les rapports
+        cutoff_date = datetime(2024, 1, 1)
+
         for symbol, info in self.societes_mapping.items():
             logger.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
-            if not company_reports:
-                results[symbol] = {'nom': info['nom_rapport'], 'statut': 'Aucun rapport trouvé', 'rapports_analyses': []}
-                continue
-            company_reports.sort(key=lambda x: x['date'], reverse=True)
-            reports_to_analyze = company_reports[:2]
             analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
-            for i, report in enumerate(reports_to_analyze):
-                logger.info(f"  -> Analyse IA {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
+
+            if not company_reports:
+                analysis_data['statut'] = 'Aucun rapport trouvé sur le site.'
+                results[symbol] = analysis_data
+                continue
+
+            # Filtrer les rapports pour ne garder que ceux après la date limite
+            recent_reports = [r for r in company_reports if r['date'] >= cutoff_date]
+            
+            if not recent_reports:
+                analysis_data['statut'] = 'La société n\'a publié aucun rapport après le 1er janvier 2024.'
+                results[symbol] = analysis_data
+                continue
+            
+            # Trier les rapports récents du plus récent au plus ancien
+            recent_reports.sort(key=lambda x: x['date'], reverse=True)
+            
+            logger.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) depuis le {cutoff_date.date()}.")
+
+            # Analyser TOUS les rapports récents
+            for i, report in enumerate(recent_reports):
+                logger.info(f"  -> Analyse IA {i+1}/{len(recent_reports)}: {report['titre'][:60]}...")
                 
                 gemini_analysis = self._analyze_pdf_with_gemini(report['url'])
                 
                 analysis_data['rapports_analyses'].append({
                     'titre': report['titre'], 
                     'url': report['url'], 
-                    'date': report['date'].strftime('%Y-%m') if report['date'].year > 1900 else 'Date inconnue',
+                    'date': report['date'].strftime('%Y-%m-%d') if report['date'].year > 1900 else 'Date inconnue',
                     'analyse_ia': gemini_analysis
                 })
-                time.sleep(2)
+                time.sleep(3) # Augmenter la pause pour respecter les limites de l'API avec plus d'appels
+            
             results[symbol] = analysis_data
+        
         logger.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
 
+    # ===== FONCTION MISE À JOUR POUR AFFICHER LE BON MESSAGE DE STATUT =====
     def create_word_report(self, results, output_path):
         logger.info(f"Création du rapport Word : {output_path}")
         try:
             doc = Document()
             doc.add_heading('Analyse Financière des Sociétés Cotées par IA (Gemini)', 0)
+            doc.add_paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
+            doc.add_paragraph("Ce rapport analyse uniquement les publications financières faites à partir du 1er janvier 2024.")
 
             for symbol, data in results.items():
                 doc.add_heading(f"{symbol} - {data['nom']}", level=2)
+                
+                # Si la liste des rapports analysés est vide, afficher le statut
                 if not data.get('rapports_analyses'):
-                    doc.add_paragraph("❌ Aucun rapport pertinent n'a été trouvé.")
+                    status_message = data.get('statut', 'Aucun rapport pertinent n\'a été trouvé.')
+                    doc.add_paragraph(f"❌ {status_message}")
                     continue
                 
                 table = doc.add_table(rows=1, cols=2, style='Table Grid')
@@ -379,7 +409,7 @@ class BRVMAnalyzer:
                 table.columns[0].width = Pt(150)
                 table.columns[1].width = Pt(350)
 
-                headers = ['Titre du Rapport / Date', "Synthèse de l'Analyse par l'IA"]
+                headers = ['Titre du Rapport / Date de Publication', "Synthèse de l'Analyse par l'IA"]
                 header_cells = table.rows[0].cells
                 header_cells[0].text = headers[0]
                 header_cells[1].text = headers[1]
@@ -388,7 +418,7 @@ class BRVMAnalyzer:
                     row_cells = table.add_row().cells
                     cell_0_p = row_cells[0].paragraphs[0]
                     cell_0_p.add_run(rapport['titre']).bold = True
-                    cell_0_p.add_run(f"\n({rapport['date']})").italic = True
+                    cell_0_p.add_run(f"\n(Date extraite : {rapport['date']})").italic = True
                     row_cells[1].text = rapport.get('analyse_ia', 'Analyse non disponible.')
 
                 doc.add_paragraph()
@@ -406,7 +436,7 @@ class BRVMAnalyzer:
             if not self.driver or not self.authenticate_google_services(): return
             if not self.verify_and_filter_companies(): return
             analysis_results = self.process_all_companies()
-            if analysis_results and any(res.get('rapports_analyses') for res in analysis_results.values()):
+            if analysis_results:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M')
                 output_filename = f"Analyse_Financiere_BRVM_{timestamp}.docx"
                 self.create_word_report(analysis_results, output_filename)
