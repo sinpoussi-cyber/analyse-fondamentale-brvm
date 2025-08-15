@@ -26,7 +26,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y chromium-chromedriver
 
-    # MISE À JOUR : Ajout de google-generativeai
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
@@ -35,7 +34,6 @@ jobs:
     - name: Run BRVM Financial Analysis Script
       env:
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-        # IMPORTANT : Assurez-vous que le secret pour l'API Gemini est bien créé sur GitHub
         GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       run: python main.py
 
