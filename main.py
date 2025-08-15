@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL (AVEC URL CORRIGÉE)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL (AVEC URL ET SÉLECTEUR CORRIGÉS)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -173,17 +173,15 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    # ===== CORRECTION DE L'URL APPLIQUÉE ICI =====
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver: return {}
-        # NOUVELLE URL
-        url = "https://www.brvm.org/fr/actualites-du-marche/publications"
+        # ===== MODIFICATION 1/2 : NOUVELLE URL =====
+        url = "https://www.brvm.org/fr/publications"
         companies_reports = defaultdict(list)
         try:
             logger.info(f"Navigation vers la nouvelle URL : {url}...")
             self.driver.get(url)
 
-            # ... [Le reste de la logique reste le même] ...
             try:
                 cookie_wait = WebDriverWait(self.driver, 5)
                 cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
@@ -193,13 +191,11 @@ class BRVMAnalyzer:
             except (TimeoutException, NoSuchElementException):
                 logger.info("Aucune bannière de cookies n'a été détectée.")
             
-            # Attendre que le conteneur des publications soit présent.
-            # ATTENTION : le sélecteur peut avoir changé, on le garde pour l'instant.
+            # ===== MODIFICATION 2/2 : NOUVEAU SÉLECTEUR D'ATTENTE PLUS ROBUSTE =====
             wait = WebDriverWait(self.driver, 30)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
-            logger.info("Le conteneur du contenu a été trouvé sur la page.")
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "footer")))
+            logger.info("Le pied de page (footer) a été trouvé, la page est chargée.")
 
-            # ... [La logique de scroll reste identique] ...
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
@@ -214,7 +210,7 @@ class BRVMAnalyzer:
                 last_height = new_height
         
         except TimeoutException:
-            logger.error("Échec : Le conteneur du contenu n'est pas apparu dans le temps imparti.")
+            logger.error("Échec : La page ne semble pas s'être chargée correctement (le footer est introuvable).")
             self._save_debug_info()
             return {}
         except Exception as e:
@@ -240,9 +236,10 @@ class BRVMAnalyzer:
 
     def _associate_reports_from_soup(self, soup, companies_reports):
         reports_found_this_pass = 0
+        # On garde l'ancien sélecteur pour les items, il est probablement toujours bon
         potential_items = soup.select("div.view-content div.views-row")
         if not potential_items:
-            logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé.")
+            logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé sur cette page.")
         for item in potential_items:
             link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
             if not link_tag: continue
