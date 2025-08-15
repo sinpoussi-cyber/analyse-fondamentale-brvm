@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL (AVEC DÉBOGAGE VISUEL AMÉLIORÉ)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -39,7 +39,7 @@ except ImportError:
     userdata = None
 from google.oauth2 import service_account
 
-# Désactiver les avertissements de sécurité (pour les requêtes HTTPS)
+# Désactiver les avertissements de sécurité
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ------------------------------------------------------------------------------
@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
 # 3. CLASSE PRINCIPALE DE L'ANALYSEUR
 # ------------------------------------------------------------------------------
 class BRVMAnalyzer:
-    # ... [Toutes les fonctions de __init__ à _normalize_text restent identiques]
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
         # Dictionnaire des sociétés à suivre. Les clés (ex: 'ABJC') DOIVENT correspondre aux noms des onglets dans le Google Sheet.
@@ -111,12 +110,17 @@ class BRVMAnalyzer:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
 
+    # ===== CORRECTION APPLIQUÉE ICI =====
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
+        
+        # NOUVELLE LIGNE : Spécifier l'emplacement du binaire Chromium pour l'environnement GitHub
+        chrome_options.binary_location = '/usr/bin/chromium-browser'
+        
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("✅ Pilote Selenium (Chrome) démarré avec succès.")
@@ -185,7 +189,7 @@ class BRVMAnalyzer:
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
-
+    
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver: return {}
         url = "https://www.brvm.org/fr/rapports-des-societes-cotees/all"
@@ -193,6 +197,7 @@ class BRVMAnalyzer:
         try:
             logger.info(f"Navigation vers {url}...")
             self.driver.get(url)
+
             try:
                 cookie_wait = WebDriverWait(self.driver, 5)
                 cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
@@ -201,9 +206,11 @@ class BRVMAnalyzer:
                 time.sleep(2)
             except (TimeoutException, NoSuchElementException):
                 logger.info("Aucune bannière de cookies n'a été détectée.")
+
             wait = WebDriverWait(self.driver, 30)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
             logger.info("Le conteneur des rapports a été trouvé sur la page.")
+
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
@@ -216,24 +223,21 @@ class BRVMAnalyzer:
                     logger.info("Fin du scroll, la hauteur de la page ne change plus.")
                     break
                 last_height = new_height
+        
         except TimeoutException:
             logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
-            self._save_debug_info() # Sauvegarde en cas d'erreur
+            self._save_debug_info()
             return {}
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
-            self._save_debug_info() # Sauvegarde en cas d'erreur
+            self._save_debug_info()
             return {}
 
-        # ===== MODIFICATION CRUCIALE =====
-        # Si, à la fin de tout le processus, aucun rapport n'a été trouvé, 
-        # on sauvegarde quand même les infos de débogage pour voir pourquoi.
         if not companies_reports:
              logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé. Sauvegarde des infos de débogage.")
              self._save_debug_info()
         return companies_reports
 
-    # ... [Le reste du code est identique]
     def _save_debug_info(self):
         try:
             screenshot_path = 'debug_screenshot.png'
