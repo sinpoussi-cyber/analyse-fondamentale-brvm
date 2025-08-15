@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4.1 (SÉLECTEUR CORRIGÉ)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4.2 (SÉLECTEURS CORRIGÉS)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -54,42 +54,42 @@ logger = logging.getLogger(__name__)
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # Dictionnaire des sociétés à suivre.
+        # Dictionnaire mis à jour pour correspondre aux noms EXACTS du site
         self.societes_mapping = {
-            'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide']},
-            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf', 'burkina faso']},
-            'BOAB': {'nom_rapport': 'BANK OF AFRICA BN', 'alternatives': ['bank of africa bn', 'benin']},
-            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['bank of africa ci', 'cote d ivoire']},
-            'BOAM': {'nom_rapport': 'BANK OF AFRICA ML', 'alternatives': ['bank of africa ml', 'mali']},
-            'BOAN': {'nom_rapport': 'BANK OF AFRICA NG', 'alternatives': ['bank of africa ng', 'niger']},
-            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn', 'senegal']},
-            'BNBC': {'nom_rapport': 'BERNABE CI', 'alternatives': ['bernabe']},
+            'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
+            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
+            'BOAB': {'nom_rapport': 'BANK OF AFRICA BN', 'alternatives': ['bank of africa bn']},
+            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['bank of africa ci']},
+            'BOAM': {'nom_rapport': 'BANK OF AFRICA ML', 'alternatives': ['bank of africa ml']},
+            'BOAN': {'nom_rapport': 'BANK OF AFRICA NG', 'alternatives': ['bank of africa ng']},
+            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn']},
+            'BNBC': {'nom_rapport': 'BERNABE CI', 'alternatives': ['bernabe ci']},
             'BICC': {'nom_rapport': 'BICI CI', 'alternatives': ['bici ci']},
-            'CABC': {'nom_rapport': 'CABC', 'alternatives': ['cabc']}, # A vérifier si c'est le bon nom
-            'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors']},
+            'CABC': {'nom_rapport': 'CABC', 'alternatives': ['cabc']},
+            'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
-            'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank']},
+            'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international']},
             'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ['ecobank cote d ivoire']},
             'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans']},
-            'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac']},
-            'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei-ceda']},
-            'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque']},
-            'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel']},
-            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci', 'cote d ivoire telecom']},
+            'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
+            'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
+            'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci']},
+            'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel bf']},
+            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci', "cote d'ivoire telecom"]},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
-            'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca']},
+            'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca ci']},
             'SPHC': {'nom_rapport': 'SAPH CI', 'alternatives': ['saph ci']},
-            'STAC': {'nom_rapport': 'SETAO CI', 'alternatives': ['setao']},
+            'STAC': {'nom_rapport': 'SETAO CI', 'alternatives': ['setao ci']},
             'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci']},
             'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque']},
-            'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra']},
-            'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel']},
-            'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire']},
+            'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra ci']},
+            'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel']},
+            'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire ci']},
             'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing sn', 'totalenergies senegal']},
-            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever']},
-            'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax']},
-            'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy']},
+            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal']},
+            'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci']},
+            'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax ci']},
+            'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy ci']},
         }
         self.gc = None
         self.driver = None
@@ -106,26 +106,26 @@ class BRVMAnalyzer:
         chrome_options.binary_location = '/usr/bin/chromium-browser'
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
-            logger.info("✅ Pilote Selenium (Chrome) démarré avec succès.")
+            logger.info("✅ Pilote Selenium (Chrome) démarré.")
         except Exception as e:
             logger.error(f"❌ Impossible de démarrer le pilote Selenium: {e}")
             self.driver = None
 
     def authenticate_google_services(self):
-        logger.info("Authentification Google via le compte de service...")
+        logger.info("Authentification Google...")
         try:
             creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
             if not creds_json_str:
-                logger.error("❌ Le secret GSPREAD_SERVICE_ACCOUNT est introuvable.")
+                logger.error("❌ Secret GSPREAD_SERVICE_ACCOUNT introuvable.")
                 return False
             creds_dict = json.loads(creds_json_str)
-            scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            scopes = ['https://www.googleapis.com/auth/spreadsheets']
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
             self.gc = gspread.authorize(creds)
             logger.info("✅ Authentification Google réussie.")
             return True
         except Exception as e:
-            logger.error(f"❌ Erreur lors de l'authentification : {e}")
+            logger.error(f"❌ Erreur d'authentification : {e}")
             return False
 
     def verify_and_filter_companies(self):
@@ -183,12 +183,12 @@ class BRVMAnalyzer:
                 logger.info(f"--- Collecte pour {symbol} ({company['name']}) ---")
                 self.driver.get(company['url'])
                 
-                # ===== CORRECTION DU SÉLECTEUR CSS ICI =====
-                wait.until(EC.presence_of_element_located((By.ID, "block-system-main")))
+                # ===== CORRECTION FINALE DU SÉLECTEUR CSS =====
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                 
                 page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                # On ajuste également ici pour chercher dans le bon conteneur
-                report_items = page_soup.select("#block-system-main div.views-row")
+                # On cible maintenant les lignes (tr) du tableau sur la page de la société
+                report_items = page_soup.select("table.views-table tbody tr")
 
                 if not report_items:
                     logger.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
@@ -205,7 +205,7 @@ class BRVMAnalyzer:
                             }
                             all_reports[symbol].append(report_data)
                             logger.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
-                time.sleep(2)
+                time.sleep(1) # Politesse
         
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
