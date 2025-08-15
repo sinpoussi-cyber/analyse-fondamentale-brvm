@@ -1,5 +1,5 @@
 # ==============================================================================
-# WORKFLOW GITHUB ACTIONS POUR L'ANALYSE BRVM (MIS À JOUR)
+# WORKFLOW GITHUB ACTIONS POUR L'ANALYSE BRVM (VERSION STABLE)
 # ==============================================================================
 name: Analyse Financière BRVM Quotidienne
 
@@ -16,17 +16,19 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # ======================================================================
+    # CORRECTION DÉFINITIVE : Utilisation d'une action dédiée pour installer
+    # Chrome et son pilote de manière stable et compatible.
+    # ======================================================================
+    - name: Setup Chrome for Selenium
+      uses: browser-actions/setup-chrome@latest
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # CORRECTION : Installation simplifiée pour utiliser les versions par défaut
-    # de l'environnement GitHub Actions et éviter les conflits.
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser
+    # L'ancienne étape "Install system dependencies" est maintenant supprimée.
 
     - name: Install Python dependencies
       run: |
