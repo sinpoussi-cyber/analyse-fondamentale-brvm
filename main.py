@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4.2 (SÉLECTEURS CORRIGÉS)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5 (LOGIQUE SIMPLIFIÉE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -27,7 +27,7 @@ from collections import defaultdict
 # Imports Selenium
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # Dictionnaire mis à jour pour correspondre aux noms EXACTS du site
+        # Dictionnaire affiné pour une meilleure correspondance
         self.societes_mapping = {
             'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
             'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
@@ -69,7 +69,7 @@ class BRVMAnalyzer:
             'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international']},
-            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ['ecobank cote d ivoire']},
+            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d'ivoire"]},
             'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans']},
             'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
             'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
@@ -169,29 +169,28 @@ class BRVMAnalyzer:
             for row in table_rows:
                 link_tag = row.find('a', href=True)
                 if link_tag:
-                    company_name = self._normalize_text(link_tag.text)
+                    company_name_normalized = self._normalize_text(link_tag.text)
                     company_url = f"https://www.brvm.org{link_tag['href']}"
-                    company_links.append({'name': company_name, 'url': company_url})
+                    
+                    symbol = self._get_symbol_from_name(company_name_normalized)
+                    if symbol and symbol in self.societes_mapping:
+                        company_links.append({'symbol': symbol, 'url': company_url})
             
-            logger.info(f"{len(company_links)} pages de sociétés trouvées.")
+            logger.info(f"{len(company_links)} pages de sociétés pertinentes à visiter.")
 
             for company in company_links:
-                symbol = self._get_symbol_from_name(company['name'])
-                if not symbol or symbol not in self.societes_mapping:
-                    continue
-                
-                logger.info(f"--- Collecte pour {symbol} ({company['name']}) ---")
+                symbol = company['symbol']
+                logger.info(f"--- Collecte pour {symbol} ---")
                 self.driver.get(company['url'])
                 
-                # ===== CORRECTION FINALE DU SÉLECTEUR CSS =====
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                 
                 page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                # On cible maintenant les lignes (tr) du tableau sur la page de la société
                 report_items = page_soup.select("table.views-table tbody tr")
 
                 if not report_items:
                     logger.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
+                    continue
 
                 for item in report_items:
                     pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
@@ -199,13 +198,13 @@ class BRVMAnalyzer:
                         full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
                         if not any(r['url'] == full_url for r in all_reports[symbol]):
                             report_data = {
-                                'titre': pdf_link_tag.get_text(strip=True),
+                                'titre': " ".join(item.get_text().split()), # Titre plus complet
                                 'url': full_url,
                                 'date': self._extract_date_from_text(item.get_text())
                             }
                             all_reports[symbol].append(report_data)
                             logger.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
-                time.sleep(1) # Politesse
+                time.sleep(1)
         
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
@@ -220,6 +219,7 @@ class BRVMAnalyzer:
                     return symbol
         return None
 
+    # ... [Le reste du code est identique et ne nécessite aucune modification]
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -271,7 +271,7 @@ class BRVMAnalyzer:
             logger.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
             if not company_reports:
-                logger.warning(f"  -> Aucun rapport trouvé pour {symbol}")
+                logger.warning(f"  -> Aucun rapport trouvé pour {symbol} lors du traitement.")
                 results[symbol] = {'nom': info['nom_rapport'], 'statut': 'Aucun rapport trouvé', 'rapports_analyses': []}
                 continue
             company_reports.sort(key=lambda x: x['date'], reverse=True)
@@ -357,4 +357,4 @@ if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
     print("="*50 + "\n      🔍 ANALYSEUR FINANCIER BRVM 🔍\n" + "="*50)
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
-    analyzer.run()
+    analyzer.run()```
