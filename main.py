@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.3 (CORRECTION ERREUR SELENIUM)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.4 (STABILITÉ GITHUB ACTIONS)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -54,7 +54,6 @@ class BRVMAnalyzer:
         self.spreadsheet_id = spreadsheet_id
         self.api_key = api_key
         
-        # ===== MISE À JOUR COMPLÈTE DES NOMS DE SOCIÉTÉS =====
         self.societes_mapping = {
             'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
             'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
@@ -106,8 +105,9 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
         
-        # CORRECTION : Spécifier explicitement le chemin de l'exécutable de Chromium pour l'environnement GitHub Actions
-        chrome_options.binary_location = '/usr/bin/chromium-browser'
+        # CORRECTION : La ligne spécifiant le chemin est maintenant supprimée.
+        # L'action 'browser-actions/setup-chrome' configure le PATH,
+        # Selenium trouvera donc le navigateur automatiquement.
         
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
@@ -165,67 +165,53 @@ class BRVMAnalyzer:
 
     def _normalize_text(self, text):
         if not text: return ""
-        text = text.replace('-', ' ') # Remplace les tirets par des espaces
+        text = text.replace('-', ' ')
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
         text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
     def _find_all_reports(self):
         if not self.driver: return {}
-        
         base_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
         company_links = []
-        
         try:
             for page_num in range(5): 
                 page_url = f"{base_url}?page={page_num}"
                 logger.info(f"Navigation vers la page de liste : {page_url}")
                 self.driver.get(page_url)
-                
                 try:
-                    wait = WebDriverWait(self.driver, 15)
-                    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                    WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                 except TimeoutException:
                     logger.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
                     break
-
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 table_rows = soup.select("table.views-table tbody tr")
-
                 if not table_rows:
                     logger.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
                     break
-
                 for row in table_rows:
                     link_tag = row.find('a', href=True)
                     if link_tag:
                         company_name_normalized = self._normalize_text(link_tag.text)
                         company_url = f"https://www.brvm.org{link_tag['href']}"
-                        
                         symbol = self._get_symbol_from_name(company_name_normalized)
                         if symbol and symbol in self.societes_mapping:
                             if not any(c['url'] == company_url for c in company_links):
                                 company_links.append({'symbol': symbol, 'url': company_url})
                 time.sleep(1)
-
             logger.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
-
             for company in company_links:
                 symbol = company['symbol']
                 logger.info(f"--- Collecte des rapports pour {symbol} ---")
-                
                 try:
                     self.driver.get(company['url'])
                     WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
-                    
                     page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                     report_items = page_soup.select("table.views-table tbody tr")
-
                     if not report_items:
                         logger.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
                         continue
-
                     for item in report_items:
                         pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
                         if pdf_link_tag:
@@ -243,11 +229,9 @@ class BRVMAnalyzer:
                     logger.error(f"  -> Timeout sur la page de {symbol}. Passage au suivant.")
                 except Exception as e:
                     logger.error(f"  -> Erreur sur la page de {symbol}: {e}. Passage au suivant.")
-        
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
             return {}
-            
         return all_reports
 
     def _get_symbol_from_name(self, company_name_normalized):
@@ -277,29 +261,22 @@ class BRVMAnalyzer:
     def _analyze_pdf_with_gemini(self, pdf_url):
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
-        
         logger.info(f"    -> Téléchargement du PDF pour l'envoyer à Gemini...")
         uploaded_file = None
         temp_pdf_path = "temp_report.pdf"
-
         try:
             response = self.session.get(pdf_url, timeout=45, verify=False)
             response.raise_for_status()
             pdf_content = response.content
-
             if len(pdf_content) < 1024:
                 return "Fichier PDF invalide ou vide."
-
             with open(temp_pdf_path, 'wb') as f:
                 f.write(pdf_content)
-            
             logger.info(f"    -> Envoi du fichier PDF ({os.path.getsize(temp_pdf_path)} octets) à l'API Gemini...")
-            
             uploaded_file = genai.upload_file(
                 path=temp_pdf_path,
                 display_name="Rapport Financier BRVM"
             )
-
             prompt = """
             Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
             Analyse le document PDF ci-joint, qui est un rapport financier, et fournis une synthèse concise en français, structurée en points clés.
@@ -313,10 +290,8 @@ class BRVMAnalyzer:
 
             Si une information n'est pas trouvée, mentionne-le clairement (ex: "Politique de dividende non mentionnée"). Sois factuel et base tes conclusions uniquement sur le document.
             """
-            
             logger.info("    -> Fichier envoyé. Génération de l'analyse...")
             response = self.gemini_model.generate_content([prompt, uploaded_file])
-            
             if response.parts:
                 return response.text
             elif response.prompt_feedback:
@@ -326,7 +301,6 @@ class BRVMAnalyzer:
                 return error_message
             else:
                  return "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
-
         except Exception as e:
             error_details = f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
             logger.error(f"    -> {error_details}", exc_info=True)
@@ -338,7 +312,6 @@ class BRVMAnalyzer:
                     genai.delete_file(uploaded_file.name)
                 except Exception as e:
                     logger.warning(f"    -> N'a pas pu supprimer le fichier temporaire de l'API : {e}")
-
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
                 logger.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
@@ -351,35 +324,25 @@ class BRVMAnalyzer:
             logger.error("❌ ÉCHEC FINAL : Aucun rapport n'a pu être collecté sur le site de la BRVM.")
             return {}
         logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
-        
         cutoff_date = datetime(2024, 1, 1)
-
         for symbol, info in self.societes_mapping.items():
             logger.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
             analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
-
             if not company_reports:
                 analysis_data['statut'] = 'Aucun rapport trouvé sur le site.'
                 results[symbol] = analysis_data
                 continue
-
             recent_reports = [r for r in company_reports if r['date'] >= cutoff_date]
-            
             if not recent_reports:
                 analysis_data['statut'] = 'La société n\'a publié aucun rapport après le 1er janvier 2024.'
                 results[symbol] = analysis_data
                 continue
-            
             recent_reports.sort(key=lambda x: x['date'], reverse=True)
-            
             logger.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) depuis le {cutoff_date.date()}.")
-
             for i, report in enumerate(recent_reports):
                 logger.info(f"  -> Analyse IA {i+1}/{len(recent_reports)}: {report['titre'][:60]}...")
-                
                 gemini_analysis = self._analyze_pdf_with_gemini(report['url'])
-                
                 analysis_data['rapports_analyses'].append({
                     'titre': report['titre'], 
                     'url': report['url'], 
@@ -387,9 +350,7 @@ class BRVMAnalyzer:
                     'analyse_ia': gemini_analysis
                 })
                 time.sleep(3)
-            
             results[symbol] = analysis_data
-        
         logger.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
 
@@ -400,34 +361,27 @@ class BRVMAnalyzer:
             doc.add_heading('Analyse Financière des Sociétés Cotées par IA (Gemini)', 0)
             doc.add_paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
             doc.add_paragraph("Ce rapport analyse uniquement les publications financières faites à partir du 1er janvier 2024.")
-
             for symbol, data in results.items():
                 doc.add_heading(f"{symbol} - {data['nom']}", level=2)
-                
                 if not data.get('rapports_analyses'):
                     status_message = data.get('statut', 'Aucun rapport pertinent n\'a été trouvé.')
                     doc.add_paragraph(f"❌ {status_message}")
                     continue
-                
                 table = doc.add_table(rows=1, cols=2, style='Table Grid')
                 table.autofit = False
                 table.columns[0].width = Pt(150)
                 table.columns[1].width = Pt(350)
-
                 headers = ['Titre du Rapport / Date de Publication', "Synthèse de l'Analyse par l'IA"]
                 header_cells = table.rows[0].cells
                 header_cells[0].text = headers[0]
                 header_cells[1].text = headers[1]
-
                 for rapport in data['rapports_analyses']:
                     row_cells = table.add_row().cells
                     cell_0_p = row_cells[0].paragraphs[0]
                     cell_0_p.add_run(rapport['titre']).bold = True
                     cell_0_p.add_run(f"\n(Date extraite : {rapport['date']})").italic = True
                     row_cells[1].text = rapport.get('analyse_ia', 'Analyse non disponible.')
-
                 doc.add_paragraph()
-
             doc.save(output_path)
             print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
         except Exception as e:
