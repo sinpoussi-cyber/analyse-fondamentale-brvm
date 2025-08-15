@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.2 (PAGINATION, FILTRE DATE, ANALYSE COMPLÈTE)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.3 (CORRECTION ERREUR SELENIUM)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -105,8 +105,10 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
-        # MODIFICATION : Suppression du chemin en dur, car chromedriver est dans le PATH de l'action Github
-        # chrome_options.binary_location = '/usr/bin/chromium-browser' 
+        
+        # CORRECTION : Spécifier explicitement le chemin de l'exécutable de Chromium pour l'environnement GitHub Actions
+        chrome_options.binary_location = '/usr/bin/chromium-browser'
+        
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("✅ Pilote Selenium (Chrome) démarré.")
@@ -272,9 +274,6 @@ class BRVMAnalyzer:
         if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
-    # ==============================================================================
-    # FONCTION CORRIGÉE AVEC GESTION D'ERREUR DÉTAILLÉE
-    # ==============================================================================
     def _analyze_pdf_with_gemini(self, pdf_url):
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
@@ -318,26 +317,19 @@ class BRVMAnalyzer:
             logger.info("    -> Fichier envoyé. Génération de l'analyse...")
             response = self.gemini_model.generate_content([prompt, uploaded_file])
             
-            # AJOUT : Vérification robuste de la réponse de Gemini
-            # Parfois, l'API ne génère pas de texte si elle est bloquée par des filtres de sécurité.
-            # Accéder à `response.text` lèverait une exception. Il faut donc vérifier avant.
             if response.parts:
                 return response.text
             elif response.prompt_feedback:
-                 # Le contenu a été bloqué. On retourne la raison.
                 block_reason = response.prompt_feedback.block_reason.name
                 error_message = f"Analyse bloquée par l'IA. Raison : {block_reason}. Le contenu du PDF a peut-être déclenché un filtre de sécurité."
                 logger.error(f"    -> {error_message}")
                 return error_message
             else:
-                 # Cas rare où il n'y a ni contenu ni feedback
                  return "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
 
-
         except Exception as e:
-            # MODIFIÉ : Retourner une erreur plus descriptive au lieu d'un message générique
             error_details = f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
-            logger.error(f"    -> {error_details}", exc_info=True) # exc_info=True ajoute la trace complète dans les logs
+            logger.error(f"    -> {error_details}", exc_info=True)
             return error_details
         finally:
             if uploaded_file:
