@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL (AVEC URL CORRIGÉE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # Dictionnaire des sociétés à suivre. Les clés (ex: 'ABJC') DOIVENT correspondre aux noms des onglets dans le Google Sheet.
+        # Dictionnaire des sociétés à suivre.
         self.societes_mapping = {
             'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair', 'servair abidjan', 'abjc']},
             'BICB': {'nom_rapport': 'BIIC BN', 'alternatives': ['biic', 'bicb']},
@@ -110,17 +110,13 @@ class BRVMAnalyzer:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
 
-    # ===== CORRECTION APPLIQUÉE ICI =====
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
-        
-        # NOUVELLE LIGNE : Spécifier l'emplacement du binaire Chromium pour l'environnement GitHub
         chrome_options.binary_location = '/usr/bin/chromium-browser'
-        
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("✅ Pilote Selenium (Chrome) démarré avec succès.")
@@ -131,14 +127,9 @@ class BRVMAnalyzer:
     def authenticate_google_services(self):
         logger.info("Authentification Google via le compte de service...")
         try:
-            creds_json_str = None
-            if userdata:
-                creds_json_str = userdata.get('GSPREAD_SERVICE_ACCOUNT')
-            else:
-                creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
-
+            creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
             if not creds_json_str:
-                logger.error("❌ Le secret 'GSPREAD_SERVICE_ACCOUNT' est introuvable ou vide.")
+                logger.error("❌ Le secret GSPREAD_SERVICE_ACCOUNT est introuvable ou vide.")
                 return False
             creds_dict = json.loads(creds_json_str)
             scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -155,30 +146,22 @@ class BRVMAnalyzer:
             logger.info(f"Vérification des feuilles dans G-Sheet (ID: {self.spreadsheet_id})...")
             sheet = self.gc.open_by_key(self.spreadsheet_id)
             existing_sheets = [ws.title for ws in sheet.worksheets()]
-            
             logger.info(f"Onglets trouvés dans le G-Sheet: {existing_sheets}")
-
             symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
             missing_symbols = [s for s in self.original_societes_mapping if s not in existing_sheets]
-            
             if missing_symbols:
                 print("\n" + "="*50 + "\n⚠️  AVERTISSEMENT : FEUILLES MANQUANTES  ⚠️")
                 for symbol in missing_symbols:
                     print(f"  - {symbol} ({self.original_societes_mapping[symbol]['nom_rapport']})")
                 print("L'analyse continuera uniquement pour les sociétés trouvées.\n" + "="*50 + "\n")
-            
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
-            
             if not self.societes_mapping:
-                logger.error("❌ ERREUR FATALE : Aucune société à analyser. Vérifiez que les noms des onglets de votre Google Sheet correspondent aux symboles du script (ex: 'BOAC', 'SNTS').")
+                logger.error("❌ ERREUR FATALE : Aucune société à analyser.")
                 return False
-            
             logger.info(f"✅ Vérification réussie. {len(self.societes_mapping)} sociétés seront analysées.")
             return True
-            
         except gspread.exceptions.SpreadsheetNotFound:
             logger.error(f"❌ Erreur: Le Spreadsheet avec l'ID '{self.spreadsheet_id}' est introuvable.")
-            logger.error("Veuillez vérifier que l'ID est correct et que le compte de service a les droits d'accès 'Lecteur'.")
             return False
         except Exception as e:
             logger.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
@@ -190,14 +173,17 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
+    # ===== CORRECTION DE L'URL APPLIQUÉE ICI =====
     def _find_all_reports_with_selenium_wire(self):
         if not self.driver: return {}
-        url = "https://www.brvm.org/fr/rapports-des-societes-cotees/all"
+        # NOUVELLE URL
+        url = "https://www.brvm.org/fr/actualites-du-marche/publications"
         companies_reports = defaultdict(list)
         try:
-            logger.info(f"Navigation vers {url}...")
+            logger.info(f"Navigation vers la nouvelle URL : {url}...")
             self.driver.get(url)
 
+            # ... [Le reste de la logique reste le même] ...
             try:
                 cookie_wait = WebDriverWait(self.driver, 5)
                 cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
@@ -206,11 +192,14 @@ class BRVMAnalyzer:
                 time.sleep(2)
             except (TimeoutException, NoSuchElementException):
                 logger.info("Aucune bannière de cookies n'a été détectée.")
-
+            
+            # Attendre que le conteneur des publications soit présent.
+            # ATTENTION : le sélecteur peut avoir changé, on le garde pour l'instant.
             wait = WebDriverWait(self.driver, 30)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
-            logger.info("Le conteneur des rapports a été trouvé sur la page.")
+            logger.info("Le conteneur du contenu a été trouvé sur la page.")
 
+            # ... [La logique de scroll reste identique] ...
             last_height = self.driver.execute_script("return document.body.scrollHeight")
             for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
@@ -225,7 +214,7 @@ class BRVMAnalyzer:
                 last_height = new_height
         
         except TimeoutException:
-            logger.error("Échec : Le conteneur des rapports n'est pas apparu dans le temps imparti.")
+            logger.error("Échec : Le conteneur du contenu n'est pas apparu dans le temps imparti.")
             self._save_debug_info()
             return {}
         except Exception as e:
