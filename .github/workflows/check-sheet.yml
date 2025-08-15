@@ -1,0 +1,32 @@
+# ==============================================================================
+# WORKFLOW DE DIAGNOSTIC POUR GOOGLE SHEETS
+# ==============================================================================
+name: Diagnostic Google Sheets
+
+on:
+  # Permet de le lancer manuellement
+  workflow_dispatch:
+
+jobs:
+  run-diagnostic:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Google Sheets dependencies
+      run: |
+        pip install gspread google-auth-oauthlib
+
+    - name: Run Diagnostic Script
+      env:
+        # On utilise le même secret que le script principal
+        GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
+      # On exécute notre nouveau script de diagnostic
+      run: python check_sheet.py
