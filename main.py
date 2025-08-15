@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5 (LOGIQUE SIMPLIFIÉE)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5.1 (SYNTAXE CORRIGÉE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -69,7 +69,7 @@ class BRVMAnalyzer:
             'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international']},
-            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d'ivoire"]},
+            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire"]},
             'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans']},
             'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
             'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
@@ -198,7 +198,7 @@ class BRVMAnalyzer:
                         full_url = pdf_link_tag['href'] if pdf_link_tag['href'].startswith('http') else f"https://www.brvm.org{pdf_link_tag['href']}"
                         if not any(r['url'] == full_url for r in all_reports[symbol]):
                             report_data = {
-                                'titre': " ".join(item.get_text().split()), # Titre plus complet
+                                'titre': " ".join(item.get_text().split()),
                                 'url': full_url,
                                 'date': self._extract_date_from_text(item.get_text())
                             }
@@ -219,7 +219,6 @@ class BRVMAnalyzer:
                     return symbol
         return None
 
-    # ... [Le reste du code est identique et ne nécessite aucune modification]
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -312,16 +311,16 @@ class BRVMAnalyzer:
                 table = doc.add_table(rows=1, cols=5, style='Table Grid')
                 headers = ['Titre du Rapport', 'Date', 'Évol. CA', 'Évol. Activités', 'Évol. RN']
                 for i, header_text in enumerate(headers):
-                    run = table.rows[0].cells[i].paragraphs[0].add_run(header_text)
+                    run = table.rows.cells[i].paragraphs.add_run(header_text)
                     run.bold = True
                 for rapport in data['rapports_analyses']:
                     row_cells = table.add_row().cells
-                    row_cells[0].text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
-                    row_cells[1].text = rapport['date']
+                    row_cells.text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
+                    row_cells.text = rapport['date']
                     donnees = rapport['donnees']
-                    row_cells[2].text = donnees.get('evolution_ca', 'N/A')
-                    row_cells[3].text = donnees.get('evolution_activites', 'N/A')
-                    row_cells[4].text = donnees.get('evolution_rn', 'N/A')
+                    row_cells.text = donnees.get('evolution_ca', 'N/A')
+                    row_cells.text = donnees.get('evolution_activites', 'N/A')
+                    row_cells.text = donnees.get('evolution_rn', 'N/A')
                 doc.add_paragraph()
             doc.save(output_path)
             print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
@@ -357,4 +356,4 @@ if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
     print("="*50 + "\n      🔍 ANALYSEUR FINANCIER BRVM 🔍\n" + "="*50)
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
-    analyzer.run()```
+    analyzer.run()
