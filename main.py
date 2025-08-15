@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL (AVEC URL ET SÉLECTEUR CORRIGÉS)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V3 (STRATÉGIE DE RECHERCHE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -148,12 +148,6 @@ class BRVMAnalyzer:
             existing_sheets = [ws.title for ws in sheet.worksheets()]
             logger.info(f"Onglets trouvés dans le G-Sheet: {existing_sheets}")
             symbols_to_keep = [s for s in self.original_societes_mapping if s in existing_sheets]
-            missing_symbols = [s for s in self.original_societes_mapping if s not in existing_sheets]
-            if missing_symbols:
-                print("\n" + "="*50 + "\n⚠️  AVERTISSEMENT : FEUILLES MANQUANTES  ⚠️")
-                for symbol in missing_symbols:
-                    print(f"  - {symbol} ({self.original_societes_mapping[symbol]['nom_rapport']})")
-                print("L'analyse continuera uniquement pour les sociétés trouvées.\n" + "="*50 + "\n")
             self.societes_mapping = {k: v for k, v in self.original_societes_mapping.items() if k in symbols_to_keep}
             if not self.societes_mapping:
                 logger.error("❌ ERREUR FATALE : Aucune société à analyser.")
@@ -173,88 +167,67 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    def _find_all_reports_with_selenium_wire(self):
+    def _find_all_reports_via_search(self):
         if not self.driver: return {}
-        # ===== MODIFICATION 1/2 : NOUVELLE URL =====
-        url = "https://www.brvm.org/fr/publications"
-        companies_reports = defaultdict(list)
-        try:
-            logger.info(f"Navigation vers la nouvelle URL : {url}...")
-            self.driver.get(url)
+        base_url = "https://www.brvm.org/fr"
+        all_reports = defaultdict(list)
+
+        for symbol, info in self.societes_mapping.items():
+            search_term = info['alternatives'][0]
+            logger.info(f"\n--- Recherche des rapports pour {symbol} (terme: '{search_term}') ---")
 
             try:
-                cookie_wait = WebDriverWait(self.driver, 5)
-                cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
-                logger.info("Bannière de cookies trouvée. Clic sur 'Accepter'.")
-                cookie_button.click()
-                time.sleep(2)
-            except (TimeoutException, NoSuchElementException):
-                logger.info("Aucune bannière de cookies n'a été détectée.")
-            
-            # ===== MODIFICATION 2/2 : NOUVEAU SÉLECTEUR D'ATTENTE PLUS ROBUSTE =====
-            wait = WebDriverWait(self.driver, 30)
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "footer")))
-            logger.info("Le pied de page (footer) a été trouvé, la page est chargée.")
+                # Utilise l'URL directe de recherche
+                search_url = f"{base_url}/search/node?keys={search_term}"
+                self.driver.get(search_url)
+                logger.info(f"Navigation vers: {search_url}")
+                
+                wait = WebDriverWait(self.driver, 20)
+                # Attendre un élément stable de la page de résultats
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "footer")))
 
-            last_height = self.driver.execute_script("return document.body.scrollHeight")
-            for i in range(20):
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                found_count = self._associate_reports_from_soup(soup, companies_reports)
-                logger.info(f"Itération {i+1}: {found_count} nouveaux rapports. Total unique: {sum(len(v) for v in companies_reports.values())}")
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(3)
-                new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height:
-                    logger.info("Fin du scroll, la hauteur de la page ne change plus.")
-                    break
-                last_height = new_height
+                search_results = soup.select("ol.search-results > li.search-result")
+                
+                if not search_results:
+                    logger.warning(f"Aucun résultat de recherche trouvé pour '{search_term}'.")
+                    continue
+                
+                logger.info(f"{len(search_results)} résultats trouvés. Analyse des liens PDF...")
+                for item in search_results:
+                    link_tag = item.find('a', href=lambda href: href and ('.pdf' in href.lower() or 'publication' in href.lower()))
+                    if link_tag and ('rapport' in item.get_text().lower() or 'financier' in item.get_text().lower() or 'activite' in item.get_text().lower()):
+                        href = link_tag.get('href')
+                        full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
+                        
+                        if not any(r['url'] == full_url for r in all_reports[symbol]):
+                             report_data = {
+                                'titre': link_tag.get_text(strip=True),
+                                'url': full_url,
+                                'date': self._extract_date_from_text(item.get_text())
+                            }
+                             all_reports[symbol].append(report_data)
+                             logger.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
+                
+                time.sleep(2)
+
+            except Exception as e:
+                logger.error(f"Erreur critique lors de la recherche pour {symbol}: {e}")
+                self._save_debug_info_for_symbol(symbol)
         
-        except TimeoutException:
-            logger.error("Échec : La page ne semble pas s'être chargée correctement (le footer est introuvable).")
-            self._save_debug_info()
-            return {}
-        except Exception as e:
-            logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
-            self._save_debug_info()
-            return {}
+        return all_reports
 
-        if not companies_reports:
-             logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé. Sauvegarde des infos de débogage.")
-             self._save_debug_info()
-        return companies_reports
-
-    def _save_debug_info(self):
+    def _save_debug_info_for_symbol(self, symbol):
         try:
-            screenshot_path = 'debug_screenshot.png'
-            html_path = 'debug_page.html'
+            screenshot_path = f'debug_{symbol}_screenshot.png'
+            html_path = f'debug_{symbol}_page.html'
             self.driver.save_screenshot(screenshot_path)
             with open(html_path, 'w', encoding='utf-8') as f:
                 f.write(self.driver.page_source)
-            logger.info(f"Infos de débogage sauvegardées : '{screenshot_path}' et '{html_path}'.")
+            logger.info(f"Infos de débogage pour '{symbol}' sauvegardées.")
         except Exception as e:
-            logger.error(f"Impossible de sauvegarder les infos de débogage : {e}")
+            logger.error(f"Impossible de sauvegarder les infos de débogage pour {symbol} : {e}")
 
-    def _associate_reports_from_soup(self, soup, companies_reports):
-        reports_found_this_pass = 0
-        # On garde l'ancien sélecteur pour les items, il est probablement toujours bon
-        potential_items = soup.select("div.view-content div.views-row")
-        if not potential_items:
-            logger.warning("Aucun élément 'div.views-row' trouvé dans le HTML analysé sur cette page.")
-        for item in potential_items:
-            link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
-            if not link_tag: continue
-            item_text_normalized = self._normalize_text(item.get_text())
-            for symbol, info in self.societes_mapping.items():
-                if any(self._normalize_text(alt) in item_text_normalized for alt in info['alternatives']):
-                    href = link_tag.get('href')
-                    full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
-                    if not any(r['url'] == full_url for r in companies_reports[symbol]):
-                        report_data = {'titre': link_tag.get_text(strip=True), 'url': full_url, 'date': self._extract_date_from_text(item.get_text())}
-                        companies_reports[symbol].append(report_data)
-                        reports_found_this_pass += 1
-                    break 
-        return reports_found_this_pass
-        
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -295,15 +268,15 @@ class BRVMAnalyzer:
         return data
 
     def process_all_companies(self):
-        all_reports = self._find_all_reports_with_selenium_wire()
+        all_reports = self._find_all_reports_via_search()
         results = {}
         total_reports_found = sum(len(reports) for reports in all_reports.values())
         if total_reports_found == 0:
-            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM.")
+            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM via la recherche.")
             return {}
-        logger.info(f"✅ {total_reports_found} rapports uniques trouvés au total.")
+        logger.info(f"\n✅ RECHERCHE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
         for symbol, info in self.societes_mapping.items():
-            logger.info(f"\n📊 Traitement de {symbol} - {info['nom_rapport']}")
+            logger.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
             if not company_reports:
                 logger.warning(f"  -> Aucun rapport trouvé pour {symbol}")
