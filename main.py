@@ -164,7 +164,6 @@ class BRVMAnalyzer:
         return re.sub(r'\s+', ' ', text).strip()
     
     def _find_all_reports(self):
-        # ... [Cette fonction reste identique à la v5.2] ...
         if not self.driver: return {}
         
         main_page_url = "https://www.brvm.org/fr/rapports-societes-cotees"
@@ -238,7 +237,6 @@ class BRVMAnalyzer:
         return None
 
     def _extract_date_from_text(self, text):
-        # ... [Cette fonction reste identique] ...
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
         if not year_match: return datetime(1900, 1, 1)
@@ -255,13 +253,15 @@ class BRVMAnalyzer:
         if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
-    # ===== NOUVELLE FONCTION D'ANALYSE PAR IA =====
+    # ===== FONCTION D'ANALYSE PAR IA CORRIGÉE =====
     def _analyze_pdf_with_gemini(self, pdf_url):
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
         
         logger.info(f"    -> Téléchargement du PDF pour l'envoyer à Gemini...")
         uploaded_file = None
+        temp_pdf_path = "temp_report.pdf"  # Nom du fichier temporaire
+
         try:
             response = self.session.get(pdf_url, timeout=45, verify=False)
             response.raise_for_status()
@@ -270,13 +270,19 @@ class BRVMAnalyzer:
             if len(pdf_content) < 1024: # Si le fichier est trop petit, il est probablement corrompu
                 return "Fichier PDF invalide ou vide."
 
-            logger.info(f"    -> Envoi du fichier PDF ({len(pdf_content)} octets) à l'API Gemini...")
-            # L'API Files gère automatiquement le type MIME pour les PDF
+            # --- DÉBUT DE LA CORRECTION ---
+            # 1. Enregistrer le contenu du PDF dans un fichier temporaire
+            with open(temp_pdf_path, 'wb') as f:
+                f.write(pdf_content)
+            
+            logger.info(f"    -> Envoi du fichier PDF ({os.path.getsize(temp_pdf_path)} octets) à l'API Gemini...")
+            
+            # 2. Envoyer le fichier en utilisant son chemin (path)
             uploaded_file = genai.upload_file(
-                path="temp_report.pdf", # Nom temporaire pour l'upload
-                display_name="Rapport Financier BRVM",
-                resource=io.BytesIO(pdf_content) # Envoi du contenu binaire
+                path=temp_pdf_path,
+                display_name="Rapport Financier BRVM"
             )
+            # --- FIN DE LA CORRECTION ---
 
             prompt = """
             Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
@@ -304,6 +310,12 @@ class BRVMAnalyzer:
             if uploaded_file:
                 logger.info(f"    -> Suppression du fichier temporaire de l'API Gemini.")
                 genai.delete_file(uploaded_file.name)
+            
+            # Nettoyage : supprimer le fichier PDF local
+            if os.path.exists(temp_pdf_path):
+                os.remove(temp_pdf_path)
+                logger.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
+
 
     def process_all_companies(self):
         all_reports = self._find_all_reports()
@@ -343,7 +355,6 @@ class BRVMAnalyzer:
         logger.info(f"Création du rapport Word : {output_path}")
         try:
             doc = Document()
-            # ... [Le code de style reste identique] ...
             doc.add_heading('Analyse Financière des Sociétés Cotées par IA (Gemini)', 0)
 
             for symbol, data in results.items():
