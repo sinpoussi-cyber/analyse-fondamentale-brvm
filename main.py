@@ -1,8 +1,10 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5.3 (DICTIONNAIRE AMÉLIORÉ)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5.2 (TOLÉRANCE AUX ERREURS)
 # ==============================================================================
 
-# ... [Toutes les importations et configurations restent identiques] ...
+# ------------------------------------------------------------------------------
+# 1. IMPORTATION DES BIBLIOTHÈQUES
+# ------------------------------------------------------------------------------
 import gspread
 import requests
 from bs4 import BeautifulSoup
@@ -52,24 +54,23 @@ logger = logging.getLogger(__name__)
 class BRVMAnalyzer:
     def __init__(self, spreadsheet_id):
         self.spreadsheet_id = spreadsheet_id
-        # ===== DICTIONNAIRE AMÉLIORÉ AVEC PLUS D'ALTERNATIVES =====
+        # Dictionnaire affiné pour une meilleure correspondance
         self.societes_mapping = {
-            'ABJC': {'nom_rapport': 'SERVAIR ABIDJAN CI', 'alternatives': ['servair abidjan', 'servair']},
             'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
-            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf', 'boa bf']},
-            'BOAB': {'nom_rapport': 'BANK OF AFRICA BN', 'alternatives': ['bank of africa bn', 'boa bn']},
-            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['bank of africa ci', 'boa ci']},
-            'BOAM': {'nom_rapport': 'BANK OF AFRICA ML', 'alternatives': ['bank of africa ml', 'boa ml']},
-            'BOAN': {'nom_rapport': 'BANK OF AFRICA NG', 'alternatives': ['bank of africa ng', 'boa ng']},
-            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn', 'boa sn']},
+            'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
+            'BOAB': {'nom_rapport': 'BANK OF AFRICA BN', 'alternatives': ['bank of africa bn']},
+            'BOAC': {'nom_rapport': 'BANK OF AFRICA CI', 'alternatives': ['bank of africa ci']},
+            'BOAM': {'nom_rapport': 'BANK OF AFRICA ML', 'alternatives': ['bank of africa ml']},
+            'BOAN': {'nom_rapport': 'BANK OF AFRICA NG', 'alternatives': ['bank of africa ng']},
+            'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn']},
             'BNBC': {'nom_rapport': 'BERNABE CI', 'alternatives': ['bernabe ci']},
             'BICC': {'nom_rapport': 'BICI CI', 'alternatives': ['bici ci']},
             'CABC': {'nom_rapport': 'CABC', 'alternatives': ['cabc']},
             'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
-            'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international', 'coris bank']},
-            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire", 'ecobank ci']},
-            'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans', 'ecobank togo']},
+            'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international']},
+            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire"]},
+            'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans']},
             'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
             'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
             'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci']},
@@ -79,13 +80,13 @@ class BRVMAnalyzer:
             'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca ci']},
             'SPHC': {'nom_rapport': 'SAPH CI', 'alternatives': ['saph ci']},
             'STAC': {'nom_rapport': 'SETAO CI', 'alternatives': ['setao ci']},
-            'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci', 'sg ci']},
-            'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque', 'sib']},
+            'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci']},
+            'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque']},
             'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra ci']},
             'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel']},
             'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire ci']},
-            'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total ci']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal', 'total sn']},
+            'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci']},
+            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal']},
             'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci']},
             'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax ci']},
             'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy ci']},
@@ -95,8 +96,7 @@ class BRVMAnalyzer:
         self.original_societes_mapping = self.societes_mapping.copy()
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
-
-    # ... [Le reste du code est IDENTIQUE et n'a pas besoin d'être modifié]
+        
     def setup_selenium(self):
         chrome_options = Options()
         chrome_options.add_argument('--headless')
@@ -316,16 +316,16 @@ class BRVMAnalyzer:
                 table = doc.add_table(rows=1, cols=5, style='Table Grid')
                 headers = ['Titre du Rapport', 'Date', 'Évol. CA', 'Évol. Activités', 'Évol. RN']
                 for i, header_text in enumerate(headers):
-                    run = table.rows[0].cells[i].paragraphs[0].add_run(header_text)
+                    run = table.rows.cells[i].paragraphs.add_run(header_text)
                     run.bold = True
                 for rapport in data['rapports_analyses']:
                     row_cells = table.add_row().cells
-                    row_cells[0].text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
-                    row_cells[1].text = rapport['date']
+                    row_cells.text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
+                    row_cells.text = rapport['date']
                     donnees = rapport['donnees']
-                    row_cells[2].text = donnees.get('evolution_ca', 'N/A')
-                    row_cells[3].text = donnees.get('evolution_activites', 'N/A')
-                    row_cells[4].text = donnees.get('evolution_rn', 'N/A')
+                    row_cells.text = donnees.get('evolution_ca', 'N/A')
+                    row_cells.text = donnees.get('evolution_activites', 'N/A')
+                    row_cells.text = donnees.get('evolution_rn', 'N/A')
                 doc.add_paragraph()
             doc.save(output_path)
             print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
@@ -361,4 +361,4 @@ if __name__ == "__main__":
     SPREADSHEET_ID = '1EGXyg13ml8a9zr4OaUPnJN3i-rwVO2uq330yfxJXnSM'
     print("="*50 + "\n      🔍 ANALYSEUR FINANCIER BRVM 🔍\n" + "="*50)
     analyzer = BRVMAnalyzer(spreadsheet_id=SPREADSHEET_ID)
-    analyzer.run()```
+    analyzer.run()
