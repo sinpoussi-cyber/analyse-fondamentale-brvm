@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5.2 (TOLÉRANCE AUX ERREURS)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V5.3 (CORRECTION FINALE WORD)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -315,17 +315,19 @@ class BRVMAnalyzer:
                     continue
                 table = doc.add_table(rows=1, cols=5, style='Table Grid')
                 headers = ['Titre du Rapport', 'Date', 'Évol. CA', 'Évol. Activités', 'Évol. RN']
+                # ===== CORRECTION DE LA SYNTAXE ICI =====
+                header_cells = table.rows[0].cells
                 for i, header_text in enumerate(headers):
-                    run = table.rows.cells[i].paragraphs.add_run(header_text)
+                    run = header_cells[i].paragraphs[0].add_run(header_text)
                     run.bold = True
                 for rapport in data['rapports_analyses']:
                     row_cells = table.add_row().cells
-                    row_cells.text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
-                    row_cells.text = rapport['date']
+                    row_cells[0].text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
+                    row_cells[1].text = rapport['date']
                     donnees = rapport['donnees']
-                    row_cells.text = donnees.get('evolution_ca', 'N/A')
-                    row_cells.text = donnees.get('evolution_activites', 'N/A')
-                    row_cells.text = donnees.get('evolution_rn', 'N/A')
+                    row_cells[2].text = donnees.get('evolution_ca', 'N/A')
+                    row_cells[3].text = donnees.get('evolution_activites', 'N/A')
+                    row_cells[4].text = donnees.get('evolution_rn', 'N/A')
                 doc.add_paragraph()
             doc.save(output_path)
             print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
