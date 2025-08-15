@@ -4,57 +4,43 @@
 name: Analyse Financière BRVM Quotidienne
 
 on:
-  # Se déclenche automatiquement tous les jours à 7h UTC
   schedule:
     - cron: '0 7 * * *'
-  
-  # Permet de lancer le workflow manuellement depuis l'onglet "Actions" de GitHub
   workflow_dispatch:
 
 jobs:
   run-analysis:
-    # Utilise la dernière version d'Ubuntu disponible
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Récupère le code de votre dépôt
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. Configure l'environnement Python
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # 3. Installe les dépendances système (le navigateur Chrome)
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y chromium-chromedriver
 
-    # 4. Installe les bibliothèques Python nécessaires
     - name: Install Python dependencies
       run: |
         pip install --upgrade pip
         pip install blinker==1.6.2 selenium-wire gspread google-auth-oauthlib google-auth-httplib2 beautifulsoup4 requests python-docx pandas openpyxl pdfplumber
 
-    # 5. Exécute le script Python principal
     - name: Run BRVM Financial Analysis Script
       env:
-        # Passe le secret contenant les identifiants du compte de service au script
         GSPREAD_SERVICE_ACCOUNT: ${{ secrets.GSPREAD_SERVICE_ACCOUNT }}
-      # IMPORTANT : Assurez-vous que le nom du fichier ici ('main.py') correspond bien au nom de votre script
       run: python main.py
 
-    # 6. Sauvegarde les fichiers générés (rapport et/ou logs de débogage)
     - name: Upload Artifacts
-      # S'exécute toujours, même si l'étape précédente échoue, pour récupérer les logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: execution-artifacts
-        # Sauvegarde le rapport .docx ET les fichiers de débogage s'ils ont été créés
         path: |
           ./*.docx
           ./debug_*.png
