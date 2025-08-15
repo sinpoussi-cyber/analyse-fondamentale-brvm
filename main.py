@@ -105,7 +105,8 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.binary_location = '/usr/bin/chromium-browser'
+        # MODIFICATION : Suppression du chemin en dur, car chromedriver est dans le PATH de l'action Github
+        # chrome_options.binary_location = '/usr/bin/chromium-browser' 
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
             logger.info("✅ Pilote Selenium (Chrome) démarré.")
@@ -167,7 +168,6 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s\.]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    # ===== FONCTION MISE À JOUR POUR GÉRER LA PAGINATION DE MANIÈRE ROBUSTE =====
     def _find_all_reports(self):
         if not self.driver: return {}
         
@@ -176,24 +176,21 @@ class BRVMAnalyzer:
         company_links = []
         
         try:
-            # Boucle sur les pages (0, 1, 2, ...). 5 est une limite de sécurité.
             for page_num in range(5): 
                 page_url = f"{base_url}?page={page_num}"
                 logger.info(f"Navigation vers la page de liste : {page_url}")
                 self.driver.get(page_url)
                 
                 try:
-                    # Attendre que le tableau soit présent
                     wait = WebDriverWait(self.driver, 15)
                     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
                 except TimeoutException:
                     logger.info(f"La page {page_num} ne semble pas contenir de tableau. Fin de la pagination.")
-                    break # Sortir de la boucle si la page est vide ou ne charge pas
+                    break
 
                 soup = BeautifulSoup(self.driver.page_source, 'html.parser')
                 table_rows = soup.select("table.views-table tbody tr")
 
-                # Si le tableau est vide, c'est la fin
                 if not table_rows:
                     logger.info(f"Aucune société trouvée sur la page {page_num}. Fin de la pagination.")
                     break
@@ -275,6 +272,9 @@ class BRVMAnalyzer:
         if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
+    # ==============================================================================
+    # FONCTION CORRIGÉE AVEC GESTION D'ERREUR DÉTAILLÉE
+    # ==============================================================================
     def _analyze_pdf_with_gemini(self, pdf_url):
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
@@ -317,21 +317,40 @@ class BRVMAnalyzer:
             
             logger.info("    -> Fichier envoyé. Génération de l'analyse...")
             response = self.gemini_model.generate_content([prompt, uploaded_file])
-            return response.text
+            
+            # AJOUT : Vérification robuste de la réponse de Gemini
+            # Parfois, l'API ne génère pas de texte si elle est bloquée par des filtres de sécurité.
+            # Accéder à `response.text` lèverait une exception. Il faut donc vérifier avant.
+            if response.parts:
+                return response.text
+            elif response.prompt_feedback:
+                 # Le contenu a été bloqué. On retourne la raison.
+                block_reason = response.prompt_feedback.block_reason.name
+                error_message = f"Analyse bloquée par l'IA. Raison : {block_reason}. Le contenu du PDF a peut-être déclenché un filtre de sécurité."
+                logger.error(f"    -> {error_message}")
+                return error_message
+            else:
+                 # Cas rare où il n'y a ni contenu ni feedback
+                 return "Erreur inconnue : L'API Gemini n'a retourné ni contenu ni feedback."
+
 
         except Exception as e:
-            logger.warning(f"    -> Erreur lors de l'analyse par Gemini : {e}")
-            return "Erreur technique lors de l'analyse par l'IA."
+            # MODIFIÉ : Retourner une erreur plus descriptive au lieu d'un message générique
+            error_details = f"Erreur technique lors de l'analyse par l'IA : {str(e)}"
+            logger.error(f"    -> {error_details}", exc_info=True) # exc_info=True ajoute la trace complète dans les logs
+            return error_details
         finally:
             if uploaded_file:
-                logger.info(f"    -> Suppression du fichier temporaire de l'API Gemini.")
-                genai.delete_file(uploaded_file.name)
-            
+                try:
+                    logger.info(f"    -> Suppression du fichier temporaire de l'API Gemini.")
+                    genai.delete_file(uploaded_file.name)
+                except Exception as e:
+                    logger.warning(f"    -> N'a pas pu supprimer le fichier temporaire de l'API : {e}")
+
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
                 logger.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
 
-    # ===== FONCTION MISE À JOUR POUR FILTRER PAR DATE ET ANALYSER TOUS LES RAPPORTS RÉCENTS =====
     def process_all_companies(self):
         all_reports = self._find_all_reports()
         results = {}
@@ -341,7 +360,6 @@ class BRVMAnalyzer:
             return {}
         logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
         
-        # Définir la date limite pour les rapports
         cutoff_date = datetime(2024, 1, 1)
 
         for symbol, info in self.societes_mapping.items():
@@ -354,7 +372,6 @@ class BRVMAnalyzer:
                 results[symbol] = analysis_data
                 continue
 
-            # Filtrer les rapports pour ne garder que ceux après la date limite
             recent_reports = [r for r in company_reports if r['date'] >= cutoff_date]
             
             if not recent_reports:
@@ -362,12 +379,10 @@ class BRVMAnalyzer:
                 results[symbol] = analysis_data
                 continue
             
-            # Trier les rapports récents du plus récent au plus ancien
             recent_reports.sort(key=lambda x: x['date'], reverse=True)
             
             logger.info(f"  -> {len(recent_reports)} rapport(s) pertinent(s) trouvé(s) depuis le {cutoff_date.date()}.")
 
-            # Analyser TOUS les rapports récents
             for i, report in enumerate(recent_reports):
                 logger.info(f"  -> Analyse IA {i+1}/{len(recent_reports)}: {report['titre'][:60]}...")
                 
@@ -379,14 +394,13 @@ class BRVMAnalyzer:
                     'date': report['date'].strftime('%Y-%m-%d') if report['date'].year > 1900 else 'Date inconnue',
                     'analyse_ia': gemini_analysis
                 })
-                time.sleep(3) # Augmenter la pause pour respecter les limites de l'API avec plus d'appels
+                time.sleep(3)
             
             results[symbol] = analysis_data
         
         logger.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
 
-    # ===== FONCTION MISE À JOUR POUR AFFICHER LE BON MESSAGE DE STATUT =====
     def create_word_report(self, results, output_path):
         logger.info(f"Création du rapport Word : {output_path}")
         try:
@@ -398,7 +412,6 @@ class BRVMAnalyzer:
             for symbol, data in results.items():
                 doc.add_heading(f"{symbol} - {data['nom']}", level=2)
                 
-                # Si la liste des rapports analysés est vide, afficher le statut
                 if not data.get('rapports_analyses'):
                     status_message = data.get('statut', 'Aucun rapport pertinent n\'a été trouvé.')
                     doc.add_paragraph(f"❌ {status_message}")
