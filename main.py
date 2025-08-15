@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.0 (ANALYSE DIRECTE DE PDF PAR IA)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V6.1 (PAGINATION ET MEILLEURE CORRESPONDANCE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -53,6 +53,8 @@ class BRVMAnalyzer:
     def __init__(self, spreadsheet_id, api_key):
         self.spreadsheet_id = spreadsheet_id
         self.api_key = api_key
+        
+        # ===== DÉBUT DES AJUSTEMENTS CLÉS (MISES À JOUR DES NOMS) =====
         self.societes_mapping = {
             'SIVC': {'nom_rapport': 'AIR LIQUIDE CI', 'alternatives': ['air liquide ci']},
             'BOABF': {'nom_rapport': 'BANK OF AFRICA BF', 'alternatives': ['bank of africa bf']},
@@ -67,28 +69,30 @@ class BRVMAnalyzer:
             'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors ci']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank international']},
-            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire"]},
-            'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans']},
+            'ECOC': {'nom_rapport': 'ECOBANK COTE D\'IVOIRE', 'alternatives': ["ecobank cote d ivoire", "ecobank ci"]},
+            'ETIT': {'nom_rapport': 'ECOBANK TRANS. INCORP. TG', 'alternatives': ['ecobank trans', 'ecobank tg']},
             'FTSC': {'nom_rapport': 'FILTISAC CI', 'alternatives': ['filtisac ci']},
             'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei ceda ci']},
-            'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci']},
+            'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque ci', 'nsbc']},
             'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel bf']},
             'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci', "cote d'ivoire telecom"]},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
             'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca ci']},
             'SPHC': {'nom_rapport': 'SAPH CI', 'alternatives': ['saph ci']},
             'STAC': {'nom_rapport': 'SETAO CI', 'alternatives': ['setao ci']},
-            'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci']},
-            'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque']},
-            'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra ci']},
-            'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel']},
-            'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire ci']},
-            'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal']},
+            'SGBC': {'nom_rapport': 'SOCIETE GENERALE CI', 'alternatives': ['societe generale ci', 'sgb ci']},
+            'SIBC': {'nom_rapport': 'SOCIETE IVOIRIENNE DE BANQUE', 'alternatives': ['societe ivoirienne de banque', 'sib']},
+            'SLBC': {'nom_rapport': 'SOLIBRA CI', 'alternatives': ['solibra ci', 'solibra']},
+            'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel sn', 'fctc sonatel', 'sonatel']},
+            'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire ci', 'sucrivoire']},
+            'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci', 'total']},
+            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing senegal', 'total senegal sa']},
             'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever ci']},
             'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax ci']},
             'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy ci']},
         }
+        # ===== FIN DES AJUSTEMENTS =====
+
         self.gc = None
         self.driver = None
         self.gemini_model = None
@@ -160,35 +164,50 @@ class BRVMAnalyzer:
     def _normalize_text(self, text):
         if not text: return ""
         text = ''.join(c for c in unicodedata.normalize('NFD', str(text).lower()) if unicodedata.category(c) != 'Mn')
-        text = re.sub(r'[^a-z0-9\s]', ' ', text)
+        text = re.sub(r'[^a-z0-9\s\.]', ' ', text) # Ajout du point pour "S.A."
         return re.sub(r'\s+', ' ', text).strip()
     
     def _find_all_reports(self):
         if not self.driver: return {}
         
-        main_page_url = "https://www.brvm.org/fr/rapports-societes-cotees"
+        # ===== DÉBUT DE LA MODIFICATION (PAGINATION) =====
+        current_page_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
+        company_links = []
         
         try:
-            logger.info(f"Navigation vers la page principale : {main_page_url}")
-            self.driver.get(main_page_url)
-            wait = WebDriverWait(self.driver, 20)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
-            
-            soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            company_links = []
-            table_rows = soup.select("table.views-table tbody tr")
-            for row in table_rows:
-                link_tag = row.find('a', href=True)
-                if link_tag:
-                    company_name_normalized = self._normalize_text(link_tag.text)
-                    company_url = f"https://www.brvm.org{link_tag['href']}"
-                    
-                    symbol = self._get_symbol_from_name(company_name_normalized)
-                    if symbol and symbol in self.societes_mapping:
-                        company_links.append({'symbol': symbol, 'url': company_url})
-            
-            logger.info(f"{len(company_links)} pages de sociétés pertinentes à visiter.")
+            while current_page_url:
+                logger.info(f"Navigation vers la page de liste : {current_page_url}")
+                self.driver.get(current_page_url)
+                wait = WebDriverWait(self.driver, 20)
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
+                
+                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                
+                # --- Collecte des liens sur la page actuelle ---
+                table_rows = soup.select("table.views-table tbody tr")
+                for row in table_rows:
+                    link_tag = row.find('a', href=True)
+                    if link_tag:
+                        company_name_normalized = self._normalize_text(link_tag.text)
+                        company_url = f"https://www.brvm.org{link_tag['href']}"
+                        
+                        symbol = self._get_symbol_from_name(company_name_normalized)
+                        if symbol and symbol in self.societes_mapping:
+                            if not any(c['url'] == company_url for c in company_links):
+                                company_links.append({'symbol': symbol, 'url': company_url})
+                
+                # --- Recherche de la page suivante ---
+                next_page_link = soup.select_one("li.pager__item--next a")
+                if next_page_link and next_page_link.has_attr('href'):
+                    current_page_url = f"https://www.brvm.org{next_page_link['href']}"
+                    time.sleep(1) # Petite pause
+                else:
+                    logger.info("Dernière page de la liste des sociétés atteinte.")
+                    current_page_url = None # Fin de la boucle
+            # ===== FIN DE LA MODIFICATION (PAGINATION) =====
+
+            logger.info(f"Collecte des liens terminée. {len(company_links)} pages de sociétés pertinentes à visiter.")
 
             for company in company_links:
                 symbol = company['symbol']
@@ -253,36 +272,31 @@ class BRVMAnalyzer:
         if 'annuel' in text_lower or '31/12' in text or '31 dec' in text_lower: return datetime(year, 12, 31)
         return datetime(year, 6, 15)
 
-    # ===== FONCTION D'ANALYSE PAR IA CORRIGÉE =====
     def _analyze_pdf_with_gemini(self, pdf_url):
         if not self.gemini_model:
             return "Analyse IA non disponible (API non configurée)."
         
         logger.info(f"    -> Téléchargement du PDF pour l'envoyer à Gemini...")
         uploaded_file = None
-        temp_pdf_path = "temp_report.pdf"  # Nom du fichier temporaire
+        temp_pdf_path = "temp_report.pdf"
 
         try:
             response = self.session.get(pdf_url, timeout=45, verify=False)
             response.raise_for_status()
             pdf_content = response.content
 
-            if len(pdf_content) < 1024: # Si le fichier est trop petit, il est probablement corrompu
+            if len(pdf_content) < 1024:
                 return "Fichier PDF invalide ou vide."
 
-            # --- DÉBUT DE LA CORRECTION ---
-            # 1. Enregistrer le contenu du PDF dans un fichier temporaire
             with open(temp_pdf_path, 'wb') as f:
                 f.write(pdf_content)
             
             logger.info(f"    -> Envoi du fichier PDF ({os.path.getsize(temp_pdf_path)} octets) à l'API Gemini...")
             
-            # 2. Envoyer le fichier en utilisant son chemin (path)
             uploaded_file = genai.upload_file(
                 path=temp_pdf_path,
                 display_name="Rapport Financier BRVM"
             )
-            # --- FIN DE LA CORRECTION ---
 
             prompt = """
             Tu es un analyste financier expert spécialisé dans les entreprises de la zone UEMOA cotées à la BRVM.
@@ -306,16 +320,13 @@ class BRVMAnalyzer:
             logger.warning(f"    -> Erreur lors de l'analyse par Gemini : {e}")
             return "Erreur technique lors de l'analyse par l'IA."
         finally:
-            # Nettoyage : supprimer le fichier des serveurs de Gemini après analyse
             if uploaded_file:
                 logger.info(f"    -> Suppression du fichier temporaire de l'API Gemini.")
                 genai.delete_file(uploaded_file.name)
             
-            # Nettoyage : supprimer le fichier PDF local
             if os.path.exists(temp_pdf_path):
                 os.remove(temp_pdf_path)
                 logger.info(f"    -> Suppression du fichier PDF local ({temp_pdf_path}).")
-
 
     def process_all_companies(self):
         all_reports = self._find_all_reports()
@@ -333,7 +344,7 @@ class BRVMAnalyzer:
                 results[symbol] = {'nom': info['nom_rapport'], 'statut': 'Aucun rapport trouvé', 'rapports_analyses': []}
                 continue
             company_reports.sort(key=lambda x: x['date'], reverse=True)
-            reports_to_analyze = company_reports[:2] # Limiter à 2 rapports pour le test, puis augmenter
+            reports_to_analyze = company_reports[:2]
             analysis_data = {'nom': info['nom_rapport'], 'rapports_analyses': []}
             for i, report in enumerate(reports_to_analyze):
                 logger.info(f"  -> Analyse IA {i+1}/{len(reports_to_analyze)}: {report['titre'][:60]}...")
@@ -346,7 +357,7 @@ class BRVMAnalyzer:
                     'date': report['date'].strftime('%Y-%m') if report['date'].year > 1900 else 'Date inconnue',
                     'analyse_ia': gemini_analysis
                 })
-                time.sleep(2) # Pause pour respecter les limites de l'API
+                time.sleep(2)
             results[symbol] = analysis_data
         logger.info("\n✅ Traitement de toutes les sociétés terminé.")
         return results
