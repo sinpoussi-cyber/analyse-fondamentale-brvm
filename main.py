@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4 (STRATÉGIE PAR CLICS)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4.1 (SÉLECTEUR CORRIGÉ)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -65,7 +65,7 @@ class BRVMAnalyzer:
             'BOAS': {'nom_rapport': 'BANK OF AFRICA SN', 'alternatives': ['bank of africa sn', 'senegal']},
             'BNBC': {'nom_rapport': 'BERNABE CI', 'alternatives': ['bernabe']},
             'BICC': {'nom_rapport': 'BICI CI', 'alternatives': ['bici ci']},
-            'CABC': {'nom_rapport': 'CABC', 'alternatives': ['cabc']},
+            'CABC': {'nom_rapport': 'CABC', 'alternatives': ['cabc']}, # A vérifier si c'est le bon nom
             'CFAC': {'nom_rapport': 'CFAO MOTORS CI', 'alternatives': ['cfao motors']},
             'CIEC': {'nom_rapport': 'CIE CI', 'alternatives': ['cie ci']},
             'CBIBF': {'nom_rapport': 'CORIS BANK INTERNATIONAL', 'alternatives': ['coris bank']},
@@ -75,7 +75,7 @@ class BRVMAnalyzer:
             'NEIC': {'nom_rapport': 'NEI-CEDA CI', 'alternatives': ['nei-ceda']},
             'NSBC': {'nom_rapport': 'NSIA BANQUE CI', 'alternatives': ['nsia banque']},
             'ONTBF': {'nom_rapport': 'ONATEL BF', 'alternatives': ['onatel']},
-            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci']},
+            'ORAC': {'nom_rapport': 'ORANGE CI', 'alternatives': ['orange ci', 'cote d ivoire telecom']},
             'PALC': {'nom_rapport': 'PALM CI', 'alternatives': ['palm ci']},
             'SAFC': {'nom_rapport': 'SAFCA CI', 'alternatives': ['safca']},
             'SPHC': {'nom_rapport': 'SAPH CI', 'alternatives': ['saph ci']},
@@ -86,8 +86,7 @@ class BRVMAnalyzer:
             'SNTS': {'nom_rapport': 'SONATEL SN', 'alternatives': ['sonatel']},
             'SCRC': {'nom_rapport': 'SUCRIVOIRE CI', 'alternatives': ['sucrivoire']},
             'TTLC': {'nom_rapport': 'TOTALENERGIES MARKETING CI', 'alternatives': ['totalenergies marketing ci']},
-            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing sn']},
-            'TTRC': {'nom_rapport': 'TOTALENERGIES MARKETING SENEGAL', 'alternatives': ['totalenergies senegal']}, # Doublon possible
+            'TTLS': {'nom_rapport': 'TOTALENERGIES MARKETING SN', 'alternatives': ['totalenergies marketing sn', 'totalenergies senegal']},
             'UNLC': {'nom_rapport': 'UNILEVER CI', 'alternatives': ['unilever']},
             'UNXC': {'nom_rapport': 'UNIWAX CI', 'alternatives': ['uniwax']},
             'SHEC': {'nom_rapport': 'VIVO ENERGY CI', 'alternatives': ['vivo energy']},
@@ -117,13 +116,13 @@ class BRVMAnalyzer:
         try:
             creds_json_str = os.environ.get('GSPREAD_SERVICE_ACCOUNT')
             if not creds_json_str:
-                logger.error("❌ Le secret GSPREAD_SERVICE_ACCOUNT est introuvable ou vide.")
+                logger.error("❌ Le secret GSPREAD_SERVICE_ACCOUNT est introuvable.")
                 return False
             creds_dict = json.loads(creds_json_str)
             scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
             creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
             self.gc = gspread.authorize(creds)
-            logger.info("✅ Authentification Google par compte de service réussie.")
+            logger.info("✅ Authentification Google réussie.")
             return True
         except Exception as e:
             logger.error(f"❌ Erreur lors de l'authentification : {e}")
@@ -152,7 +151,6 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    # ===== NOUVELLE STRATÉGIE DE SCRAPING PAR CLICS =====
     def _find_all_reports(self):
         if not self.driver: return {}
         
@@ -160,12 +158,11 @@ class BRVMAnalyzer:
         all_reports = defaultdict(list)
         
         try:
-            logger.info(f"Navigation vers la page principale des rapports : {main_page_url}")
+            logger.info(f"Navigation vers la page principale : {main_page_url}")
             self.driver.get(main_page_url)
             wait = WebDriverWait(self.driver, 20)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-table")))
             
-            # 1. Collecter tous les liens des pages de sociétés
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
             company_links = []
             table_rows = soup.select("table.views-table tbody tr")
@@ -176,20 +173,25 @@ class BRVMAnalyzer:
                     company_url = f"https://www.brvm.org{link_tag['href']}"
                     company_links.append({'name': company_name, 'url': company_url})
             
-            logger.info(f"{len(company_links)} pages de sociétés trouvées. Début de la collecte des rapports.")
+            logger.info(f"{len(company_links)} pages de sociétés trouvées.")
 
-            # 2. Visiter chaque page de société et extraire les rapports
             for company in company_links:
                 symbol = self._get_symbol_from_name(company['name'])
                 if not symbol or symbol not in self.societes_mapping:
-                    continue # On ignore les sociétés qu'on ne suit pas
+                    continue
                 
                 logger.info(f"--- Collecte pour {symbol} ({company['name']}) ---")
                 self.driver.get(company['url'])
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content")))
+                
+                # ===== CORRECTION DU SÉLECTEUR CSS ICI =====
+                wait.until(EC.presence_of_element_located((By.ID, "block-system-main")))
                 
                 page_soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                report_items = page_soup.select("div.view-content div.views-row")
+                # On ajuste également ici pour chercher dans le bon conteneur
+                report_items = page_soup.select("#block-system-main div.views-row")
+
+                if not report_items:
+                    logger.warning(f"  -> Aucun rapport listé sur la page de {symbol}.")
 
                 for item in report_items:
                     pdf_link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
@@ -203,7 +205,7 @@ class BRVMAnalyzer:
                             }
                             all_reports[symbol].append(report_data)
                             logger.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
-                time.sleep(2) # Politesse
+                time.sleep(2)
         
         except Exception as e:
             logger.error(f"Erreur critique lors du scraping : {e}", exc_info=True)
@@ -218,7 +220,6 @@ class BRVMAnalyzer:
                     return symbol
         return None
 
-    # ... [Les fonctions d'extraction de données et de création de rapport restent les mêmes]
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -265,7 +266,7 @@ class BRVMAnalyzer:
         if total_reports_found == 0:
             logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM.")
             return {}
-        logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
+        logger.info(f"\n✅ COLLECTE TERMINÉE : {total_reports_found} rapports uniques trouvés.")
         for symbol, info in self.societes_mapping.items():
             logger.info(f"\n📊 Traitement des données pour {symbol} - {info['nom_rapport']}")
             company_reports = all_reports.get(symbol, [])
@@ -289,7 +290,40 @@ class BRVMAnalyzer:
         logger.info(f"Création du rapport Word : {output_path}")
         try:
             doc = Document()
-            # ... [la création du document Word reste identique]
+            doc.styles['Normal'].font.name = 'Calibri'
+            doc.styles['Normal'].font.size = Pt(11)
+            doc.add_heading('Analyse Financière des Sociétés Cotées', 0).alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_heading('Bourse Régionale des Valeurs Mobilières (BRVM)', 1).alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p = doc.add_paragraph(f'\nRapport généré le : {datetime.now().strftime("%d %B %Y à %H:%M")}\n', style='Caption')
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            total_companies = len(results)
+            companies_with_reports = len([r for r in results.values() if r.get('rapports_analyses')])
+            total_reports = sum(len(r.get('rapports_analyses', [])) for r in results.values())
+            stats_p = doc.add_paragraph()
+            stats_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            stats_run = stats_p.add_run(f'Synthèse : {companies_with_reports}/{total_companies} sociétés avec rapports trouvés • {total_reports} rapports récents analysés')
+            stats_run.bold = True
+            doc.add_page_break()
+            for symbol, data in results.items():
+                doc.add_heading(f"{symbol} - {data['nom']}", level=2)
+                if not data.get('rapports_analyses'):
+                    doc.add_paragraph("❌ Aucun rapport pertinent n'a été trouvé ou analysé pour cette société.")
+                    continue
+                table = doc.add_table(rows=1, cols=5, style='Table Grid')
+                headers = ['Titre du Rapport', 'Date', 'Évol. CA', 'Évol. Activités', 'Évol. RN']
+                for i, header_text in enumerate(headers):
+                    run = table.rows[0].cells[i].paragraphs[0].add_run(header_text)
+                    run.bold = True
+                for rapport in data['rapports_analyses']:
+                    row_cells = table.add_row().cells
+                    row_cells[0].text = rapport['titre'][:70] + ('...' if len(rapport['titre']) > 70 else '')
+                    row_cells[1].text = rapport['date']
+                    donnees = rapport['donnees']
+                    row_cells[2].text = donnees.get('evolution_ca', 'N/A')
+                    row_cells[3].text = donnees.get('evolution_activites', 'N/A')
+                    row_cells[4].text = donnees.get('evolution_rn', 'N/A')
+                doc.add_paragraph()
+            doc.save(output_path)
             print("\n" + "="*80 + "\n🎉 RAPPORT FINALISÉ 🎉\n" + f"📁 Fichier sauvegardé : {output_path}" + "\n" + "="*80 + "\n")
         except Exception as e:
             logger.error(f"❌ Impossible d'enregistrer le rapport Word : {e}")
