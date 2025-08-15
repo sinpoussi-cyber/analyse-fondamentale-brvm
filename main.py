@@ -1,5 +1,5 @@
 # ==============================================================================
-# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V3 (STRATÉGIE DE RECHERCHE)
+# ANALYSEUR FINANCIER BRVM - SCRIPT FINAL V4 (NAVIGATION DIRECTE)
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -27,7 +27,7 @@ from collections import defaultdict
 # Imports Selenium
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -116,6 +116,7 @@ class BRVMAnalyzer:
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument("--window-size=1920,1080")
+        # NOUVEAU : Correction du chemin pour GitHub Actions (Chromium)
         chrome_options.binary_location = '/usr/bin/chromium-browser'
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
@@ -154,9 +155,6 @@ class BRVMAnalyzer:
                 return False
             logger.info(f"✅ Vérification réussie. {len(self.societes_mapping)} sociétés seront analysées.")
             return True
-        except gspread.exceptions.SpreadsheetNotFound:
-            logger.error(f"❌ Erreur: Le Spreadsheet avec l'ID '{self.spreadsheet_id}' est introuvable.")
-            return False
         except Exception as e:
             logger.error(f"❌ Erreur lors de la vérification du G-Sheet: {e}")
             return False
@@ -167,53 +165,89 @@ class BRVMAnalyzer:
         text = re.sub(r'[^a-z0-9\s]', ' ', text)
         return re.sub(r'\s+', ' ', text).strip()
     
-    def _find_all_reports_via_search(self):
+    # NOUVELLE STRATÉGIE DE SCRAPING : NAVIGATION DIRECTE VERS LA LISTE DES SOCIÉTÉS
+    def _find_all_reports_with_selenium(self):
         if not self.driver: return {}
-        base_url = "https://www.brvm.org/fr"
+        # NOUVELLE URL d'entrée pour la liste des sociétés
+        list_url = "https://www.brvm.org/fr/rapports-societes-cotees"
         all_reports = defaultdict(list)
+        base_url = "https://www.brvm.org"
 
-        for symbol, info in self.societes_mapping.items():
-            search_term = info['alternatives'][0]
-            logger.info(f"\n--- Recherche des rapports pour {symbol} (terme: '{search_term}') ---")
-
+        try:
+            logger.info(f"Navigation vers la page de liste : {list_url}...")
+            self.driver.get(list_url)
+            
+            # Gérer les cookies si la bannière apparaît
             try:
-                # Utilise l'URL directe de recherche
-                search_url = f"{base_url}/search/node?keys={search_term}"
-                self.driver.get(search_url)
-                logger.info(f"Navigation vers: {search_url}")
-                
-                wait = WebDriverWait(self.driver, 20)
-                # Attendre un élément stable de la page de résultats
-                wait.until(EC.presence_of_element_located((By.TAG_NAME, "footer")))
-
-                soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-                search_results = soup.select("ol.search-results > li.search-result")
-                
-                if not search_results:
-                    logger.warning(f"Aucun résultat de recherche trouvé pour '{search_term}'.")
-                    continue
-                
-                logger.info(f"{len(search_results)} résultats trouvés. Analyse des liens PDF...")
-                for item in search_results:
-                    link_tag = item.find('a', href=lambda href: href and ('.pdf' in href.lower() or 'publication' in href.lower()))
-                    if link_tag and ('rapport' in item.get_text().lower() or 'financier' in item.get_text().lower() or 'activite' in item.get_text().lower()):
-                        href = link_tag.get('href')
-                        full_url = href if href.startswith('http') else f"https://www.brvm.org{href}"
-                        
-                        if not any(r['url'] == full_url for r in all_reports[symbol]):
-                             report_data = {
-                                'titre': link_tag.get_text(strip=True),
-                                'url': full_url,
-                                'date': self._extract_date_from_text(item.get_text())
-                            }
-                             all_reports[symbol].append(report_data)
-                             logger.info(f"  -> Trouvé : {report_data['titre'][:70]}...")
-                
+                cookie_wait = WebDriverWait(self.driver, 5)
+                # Sélecteur CSS basé sur l'ID du bouton Accepter/Personnaliser
+                cookie_button = cookie_wait.until(EC.element_to_be_clickable((By.ID, "tarteaucitronPersonalize2")))
+                logger.info("Bannière de cookies trouvée. Clic sur 'Accepter'.")
+                cookie_button.click()
                 time.sleep(2)
+            except TimeoutException:
+                logger.info("Aucune bannière de cookies n'a été détectée.")
 
-            except Exception as e:
-                logger.error(f"Erreur critique lors de la recherche pour {symbol}: {e}")
-                self._save_debug_info_for_symbol(symbol)
+            # Attendre que le tableau des sociétés soit présent (sélecteur basé sur la capture d'écran)
+            wait = WebDriverWait(self.driver, 20)
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content table")))
+            logger.info("Le tableau des sociétés a été trouvé.")
+
+            # Parcourir la liste des sociétés à partir du mapping
+            for symbol, info in self.societes_mapping.items():
+                # Trouver le lien de la société dans le tableau en utilisant son symbole comme texte
+                try:
+                    company_link_element = self.driver.find_element(By.LINK_TEXT, symbol)
+                    company_report_url = company_link_element.get_attribute('href')
+                    logger.info(f"\n--- Navigation vers la page de rapports de {symbol} : {company_report_url} ---")
+                    
+                    self.driver.get(company_report_url)
+                    
+                    # Attendre que le conteneur des rapports individuels se charge (classe CSS probable)
+                    report_list_selector = "div.view-content" 
+                    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, report_list_selector)))
+                    time.sleep(2) # Pause pour s'assurer que le contenu est là
+
+                    soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+                    # Sélecteur pour trouver les rapports individuels
+                    reports_found = soup.select("div.views-row")
+
+                    if not reports_found:
+                        logger.warning(f"Aucun rapport trouvé pour {symbol} sur la page spécifique.")
+                        continue
+
+                    for item in reports_found:
+                        link_tag = item.find('a', href=lambda href: href and '.pdf' in href.lower())
+                        if link_tag:
+                            href = link_tag.get('href')
+                            full_url = href if href.startswith('http') else f"{base_url}{href}"
+                            
+                            if not any(r['url'] == full_url for r in all_reports[symbol]):
+                                report_data = {
+                                    'titre': link_tag.get_text(strip=True),
+                                    'url': full_url,
+                                    'date': self._extract_date_from_text(item.get_text())
+                                }
+                                all_reports[symbol].append(report_data)
+                                logger.info(f"  -> Trouvé rapport PDF pour {symbol}: {report_data['titre'][:70]}...")
+                    
+                    # Revenir à la page de liste pour la prochaine itération
+                    self.driver.back()
+                    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.view-content table")))
+                    time.sleep(2)
+
+                except NoSuchElementException:
+                    logger.warning(f"Lien pour la société {symbol} introuvable sur la page de liste.")
+                    continue
+                except Exception as e:
+                    logger.error(f"Erreur lors du scraping des rapports pour {symbol}: {e}")
+                    self._save_debug_info_for_symbol(symbol)
+                    continue
+
+        # Si aucun rapport n'a été trouvé du tout, sauvegarde les infos de débogage
+        if not all_reports:
+             logger.warning("Le scraping s'est terminé mais aucun rapport n'a pu être associé. Sauvegarde des infos de débogage.")
+             self._save_debug_info_for_symbol("GLOBAL_NO_REPORTS")
         
         return all_reports
 
@@ -227,7 +261,7 @@ class BRVMAnalyzer:
             logger.info(f"Infos de débogage pour '{symbol}' sauvegardées.")
         except Exception as e:
             logger.error(f"Impossible de sauvegarder les infos de débogage pour {symbol} : {e}")
-
+    # ... [Le reste des fonctions reste identique]
     def _extract_date_from_text(self, text):
         if not text: return datetime(1900, 1, 1)
         year_match = re.search(r'\b(20\d{2})\b', text)
@@ -268,11 +302,11 @@ class BRVMAnalyzer:
         return data
 
     def process_all_companies(self):
-        all_reports = self._find_all_reports_via_search()
+        all_reports = self._find_all_reports_with_selenium()
         results = {}
         total_reports_found = sum(len(reports) for reports in all_reports.values())
         if total_reports_found == 0:
-            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM via la recherche.")
+            logger.error("❌ ÉCHEC FINAL : Aucun rapport trouvé sur le site de la BRVM.")
             return {}
         logger.info(f"\n✅ RECHERCHE TERMINÉE : {total_reports_found} rapports uniques trouvés au total.")
         for symbol, info in self.societes_mapping.items():
